@@ -1,0 +1,6 @@
+{
+  "name": "AI Expense Intelligence",
+  "description": "Production-quality AI-powered personal expense tracking, bank statement analyzer, financial health intelligence dashboard, and conversational advisor.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

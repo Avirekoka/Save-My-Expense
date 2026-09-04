@@ -8,7 +8,18 @@
   }
 }
 
+html.overflow-hidden,
+body.overflow-hidden {
+  overflow: hidden !important;
+  touch-action: none;
+}
+
 /* Custom sleek dark scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2b2b2b #0f0f0f;
+}
+
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -22,4 +33,9 @@
 }
 ::-webkit-scrollbar-thumb:hover {
   background: #404040;
+}
+
+#sidebar-scrollable-content {
+  scrollbar-width: thin;
+  scrollbar-color: #333333 transparent;
 }

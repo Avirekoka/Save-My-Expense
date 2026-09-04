@@ -3,6 +3,7 @@ import { AlertTriangle, Trash2, X } from 'lucide-react';
 import { Transaction, Category } from '../../types';
 import { formatCurrency, formatDate } from '../../utils/formatters';
 import { CategoryIcon } from '../common/CategoryIcon';
+import { useScrollLock } from '../../hooks/useScrollLock';
 
 interface DeleteConfirmModalProps {
   isOpen: boolean;
@@ -21,6 +22,8 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
   categories = [],
   currencySymbol,
 }) => {
+  useScrollLock(isOpen && !!transaction);
+
   if (!isOpen || !transaction) return null;
 
   const category = categories.find((c) => c.id === transaction.categoryId);

@@ -1,22 +1,28 @@
+import { getCurrencySymbol, getCurrencyLocale } from './currency';
+export { getCurrencySymbol, getCurrencyLocale, SUPPORTED_CURRENCIES } from './currency';
+
 export function formatCurrency(
   amount: number,
   currencySymbol = '₹',
-  locale = 'en-IN'
+  locale?: string
 ): string {
   const isNegative = amount < 0;
   const absAmount = Math.abs(amount);
+  const resolvedSymbol = getCurrencySymbol(currencySymbol);
+  const resolvedLocale = locale || getCurrencyLocale(resolvedSymbol);
 
   let formatted = '';
   try {
-    formatted = new Intl.NumberFormat(locale, {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
+    const hasFraction = absAmount % 1 !== 0;
+    formatted = new Intl.NumberFormat(resolvedLocale, {
+      minimumFractionDigits: hasFraction ? 2 : 0,
+      maximumFractionDigits: 2,
     }).format(absAmount);
   } catch (e) {
     formatted = absAmount.toLocaleString();
   }
 
-  return `${isNegative ? '-' : ''}${currencySymbol}${formatted}`;
+  return `${isNegative ? '-' : ''}${resolvedSymbol}${formatted}`;
 }
 
 export function formatDate(dateStr: string): string {
@@ -74,4 +80,52 @@ export function getRelativeTime(dateStr: string): string {
   } catch (e) {
     return dateStr;
   }
+}
+
+export interface MonthOption {
+  value: string; // '2026-08'
+  label: string; // 'August 2026'
+}
+
+/**
+ * Returns the last 3 calendar months formatted as options,
+ * including any additional requested month if specified.
+ */
+export function getLastThreeMonths(additionalMonth?: string): MonthOption[] {
+  const result: MonthOption[] = [];
+  const now = new Date();
+
+  // If current month is 2026-09 or 2026-08, compute last 3 calendar months
+  for (let i = 0; i < 3; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const value = `${yyyy}-${mm}`;
+    const label = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    result.push({ value, label });
+  }
+
+  // Ensure additionalMonth (e.g. current selected month from seed data like 2026-08) is selectable if not present
+  if (
+    additionalMonth &&
+    additionalMonth !== 'all' &&
+    !result.some((m) => m.value === additionalMonth)
+  ) {
+    result.push({
+      value: additionalMonth,
+      label: getMonthName(additionalMonth),
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Formats a Date object to YYYY-MM-DD
+ */
+export function toISODateString(d: Date): string {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
 }

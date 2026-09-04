@@ -14,6 +14,7 @@ import { Budget, Category } from '../../types';
 import { storageService, NOTIFY_EVENT } from '../../services/storage/storage.service';
 import { formatCurrency } from '../../utils/formatters';
 import { CategoryIcon } from '../common/CategoryIcon';
+import { useScrollLock } from '../../hooks/useScrollLock';
 
 interface BudgetsViewProps {
   currentMonth: string;
@@ -28,6 +29,8 @@ export const BudgetsView: React.FC<BudgetsViewProps> = ({
   const [categories, setCategories] = useState<Category[]>([]);
   const [editingBudget, setEditingBudget] = useState<Budget | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+
+  useScrollLock(isModalOpen && !!editingBudget);
   const [recommending, setRecommending] = useState(false);
   const [aiSuccessMessage, setAiSuccessMessage] = useState<string | null>(null);
   const [aiRecommendations, setAiRecommendations] = useState<
@@ -114,7 +117,7 @@ export const BudgetsView: React.FC<BudgetsViewProps> = ({
   };
 
   return (
-    <div className="space-y-6 pb-12">
+    <div className="space-y-5 sm:space-y-6 pb-6 sm:pb-8">
       {aiSuccessMessage && (
         <div className="flex items-center gap-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 p-3 text-xs text-emerald-400 animate-in fade-in">
           <CheckCircle2 size={16} />
@@ -123,7 +126,7 @@ export const BudgetsView: React.FC<BudgetsViewProps> = ({
       )}
 
       {/* Top Banner */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
             Budgets & Planned Allocations
@@ -133,11 +136,11 @@ export const BudgetsView: React.FC<BudgetsViewProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 flex-wrap">
           <button
             onClick={handleGenerateAiBudgets}
             disabled={recommending}
-            className="flex h-9 items-center gap-1.5 rounded-xl border border-blue-500/30 bg-blue-600/10 px-3 text-xs font-semibold text-blue-300 hover:bg-blue-600/20 shadow-xs"
+            className="flex h-9 items-center gap-1.5 rounded-xl border border-blue-500/30 bg-blue-600/10 px-3 text-xs font-semibold text-blue-300 hover:bg-blue-600/20 shadow-xs cursor-pointer"
           >
             {recommending ? (
               <Loader2 size={14} className="animate-spin" />
@@ -158,7 +161,7 @@ export const BudgetsView: React.FC<BudgetsViewProps> = ({
               });
               setIsModalOpen(true);
             }}
-            className="flex h-9 items-center gap-1.5 rounded-xl bg-blue-600 px-3.5 text-xs font-bold text-white shadow-xs hover:bg-blue-500"
+            className="flex h-9 items-center gap-1.5 rounded-xl bg-blue-600 px-3.5 text-xs font-bold text-white shadow-xs hover:bg-blue-500 cursor-pointer"
           >
             <Plus size={15} strokeWidth={2.5} />
             <span>Create Budget</span>
@@ -168,7 +171,7 @@ export const BudgetsView: React.FC<BudgetsViewProps> = ({
 
       {/* AI Recommendations Panel */}
       {aiRecommendations.length > 0 && (
-        <div className="rounded-xl border border-blue-500/30 bg-blue-600/10 p-6 shadow-xs space-y-4">
+        <div className="rounded-xl border border-blue-500/30 bg-blue-600/10 p-4 sm:p-5 lg:p-6 shadow-xs space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Sparkles className="text-blue-400" size={18} />
@@ -178,7 +181,7 @@ export const BudgetsView: React.FC<BudgetsViewProps> = ({
             </div>
             <button
               onClick={handleApplyAiRecommendations}
-              className="rounded-lg bg-blue-600 px-4 py-1.5 text-xs font-bold text-white shadow-xs hover:bg-blue-500"
+              className="rounded-lg bg-blue-600 px-4 py-1.5 text-xs font-bold text-white shadow-xs hover:bg-blue-500 cursor-pointer"
             >
               Apply All Recommendations
             </button>
@@ -201,7 +204,7 @@ export const BudgetsView: React.FC<BudgetsViewProps> = ({
       )}
 
       {/* Active Budgets Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
         {budgets.map((b) => {
           const cat = categories.find((c) => c.id === b.categoryId);
           const spent = summary.categorySpending[b.categoryId] || 0;
@@ -213,7 +216,7 @@ export const BudgetsView: React.FC<BudgetsViewProps> = ({
           return (
             <div
               key={b.id}
-              className="rounded-xl border border-[#262626] bg-[#141414] p-5 shadow-xs flex flex-col justify-between"
+              className="rounded-xl border border-[#262626] bg-[#141414] p-4 sm:p-5 shadow-xs flex flex-col justify-between"
             >
               <div>
                 <div className="flex items-center justify-between border-b border-[#262626] pb-3">

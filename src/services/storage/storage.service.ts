@@ -11,8 +11,10 @@ import {
   AIInsight,
   FinancialHealthScore,
   HealthScoreFactor,
+  RecurringSchedule,
 } from '../../types';
 import { DEFAULT_CATEGORIES } from '../../data/defaultCategories';
+import { getCurrencySymbol } from '../../utils/currency';
 import {
   SEED_PROFILE,
   SEED_TRANSACTIONS,
@@ -21,7 +23,19 @@ import {
   SEED_SUBSCRIPTIONS,
   SEED_EMI_LOANS,
   SEED_NOTIFICATIONS,
+  SEED_RECURRING_SCHEDULES,
 } from '../../data/seedData';
+import {
+  db,
+  doc,
+  setDoc,
+  getDoc,
+  deleteDoc,
+  collection,
+  getDocs,
+  writeBatch,
+  serverTimestamp,
+} from '../firebase/firebase';
 
 const STORAGE_KEYS = {
   TRANSACTIONS: 'ais_spend_transactions_v1',
@@ -34,6 +48,7 @@ const STORAGE_KEYS = {
   NOTIFICATIONS: 'ais_spend_notifications_v1',
   STATEMENTS: 'ais_spend_statements_v1',
   INSIGHTS: 'ais_spend_insights_v1',
+  RECURRING_SCHEDULES: 'ais_spend_recurring_schedules_v1',
 };
 
 export const NOTIFY_EVENT = 'ais_spend_data_changed';
@@ -45,35 +60,415 @@ function triggerUpdate() {
 }
 
 class StorageService {
+  private currentUserId: string | null = null;
+  private currentUserEmail: string | null = null;
+  private currentUserName: string | null = null;
+  private currentUserPhoto: string | null = null;
+  private currentProvider: string | null = null;
+
+  // In-Memory Transient State for Demo User (NEVER saved to database or localStorage)
+  private demoTransactions: Transaction[] | null = null;
+  private demoBudgets: Budget[] | null = null;
+  private demoGoals: FinancialGoal[] | null = null;
+  private demoProfile: UserProfile | null = null;
+  private demoCategories: Category[] | null = null;
+  private demoSubscriptions: Subscription[] | null = null;
+  private demoLoans: EMILoan[] | null = null;
+  private demoRecurring: RecurringSchedule[] | null = null;
+  private demoStatements: StatementUpload[] | null = null;
+  private demoNotifications: NotificationItem[] | null = null;
+  private demoInsights: AIInsight[] | null = null;
+
+  constructor() {
+    // Purge any stale demo remnants from localStorage
+    this.cleanDemoLocalStorage();
+
+    // Restore genuine user session synchronously on startup if saved locally
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('ais_auth_current_user');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed && parsed.uid && parsed.provider !== 'demo') {
+            this.currentUserId = parsed.uid;
+            this.currentUserEmail = parsed.email || null;
+            this.currentUserName = parsed.displayName || null;
+            this.currentUserPhoto = parsed.photoURL || null;
+            this.currentProvider = parsed.provider || 'authenticated';
+
+            // Background sync with Firestore database
+            setTimeout(() => {
+              if (this.currentUserId && !this.isDemoUser()) {
+                this.syncGenuineUserWithFirestore(this.currentUserId);
+              }
+            }, 80);
+          }
+        }
+      } catch (_) {}
+    }
+  }
+
+  /**
+   * Helper to identify if current active session is a demo user.
+   */
+  isDemoUser(): boolean {
+    return (
+      this.currentProvider === 'demo' ||
+      this.currentUserId === 'demo_user_spendai_01' ||
+      (this.currentUserId ? this.currentUserId.startsWith('demo_') : false)
+    );
+  }
+
+  /**
+   * Purges any demo entries from localStorage to guarantee zero demo footprint in local storage.
+   */
+  private cleanDemoLocalStorage(): void {
+    if (typeof window === 'undefined') return;
+    try {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (key.includes('demo_user_spendai_01') || key.includes('ais_demo_'))) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach((k) => localStorage.removeItem(k));
+    } catch (_) {}
+  }
+
+  /**
+   * Sets current user session to strictly isolate data by user UID.
+   * For Demo Users: Fetches baseline transactions into memory state. Any actions stay in state only.
+   * For Genuine Users: Persists session and syncs with cloud Firestore database.
+   */
+  setCurrentUser(
+    user: {
+      uid: string;
+      email?: string | null;
+      displayName?: string | null;
+      photoURL?: string | null;
+      provider?: string | null;
+    } | null
+  ): void {
+    const prevId = this.currentUserId;
+    if (user && user.uid) {
+      this.currentUserId = user.uid;
+      this.currentUserEmail = user.email || null;
+      this.currentUserName = user.displayName || null;
+      this.currentUserPhoto = user.photoURL || null;
+      this.currentProvider = user.provider || 'authenticated';
+
+      if (this.isDemoUser()) {
+        // Only re-seed demo data if switching user or first initializing
+        if (prevId !== user.uid || !this.demoTransactions) {
+          this.cleanDemoLocalStorage();
+          this.demoTransactions = JSON.parse(JSON.stringify(SEED_TRANSACTIONS));
+          this.demoBudgets = JSON.parse(JSON.stringify(SEED_BUDGETS));
+          this.demoGoals = JSON.parse(JSON.stringify(SEED_GOALS));
+          this.demoProfile = {
+            ...SEED_PROFILE,
+            name: user.displayName || 'Ashwin Kumar',
+            email: user.email || 'ashwin.finance@spendai.io',
+            currency: '₹',
+            currencySymbol: '₹',
+          };
+          this.demoCategories = JSON.parse(JSON.stringify(DEFAULT_CATEGORIES));
+          this.demoSubscriptions = JSON.parse(JSON.stringify(SEED_SUBSCRIPTIONS));
+          this.demoLoans = JSON.parse(JSON.stringify(SEED_EMI_LOANS));
+          this.demoRecurring = JSON.parse(JSON.stringify(SEED_RECURRING_SCHEDULES));
+          this.demoStatements = [];
+          this.demoNotifications = JSON.parse(JSON.stringify(SEED_NOTIFICATIONS));
+          this.demoInsights = [];
+        } else {
+          // Keep current in-memory modifications for demo user
+          if (this.demoProfile) {
+            if (user.displayName) this.demoProfile.name = user.displayName;
+            if (user.email) this.demoProfile.email = user.email;
+            if (user.photoURL !== undefined) this.demoProfile.photoURL = user.photoURL || undefined;
+          }
+        }
+      } else {
+        // GENUINE USER: Clear demo state, persist local user cache, and sync with Firestore database
+        this.demoTransactions = null;
+        this.demoBudgets = null;
+        this.demoGoals = null;
+        this.demoProfile = null;
+        this.demoCategories = null;
+        this.demoSubscriptions = null;
+        this.demoLoans = null;
+        this.demoRecurring = null;
+        this.demoStatements = null;
+        this.demoNotifications = null;
+        this.demoInsights = null;
+
+        try {
+          localStorage.setItem(
+            'ais_auth_current_user',
+            JSON.stringify({
+              uid: this.currentUserId,
+              email: this.currentUserEmail,
+              displayName: this.currentUserName,
+              photoURL: this.currentUserPhoto,
+              provider: this.currentProvider,
+            })
+          );
+        } catch (_) {}
+
+        // Ensure user profile exists for genuine user
+        const userProfileKey = this.getKey('PROFILE');
+        const existingProfile = localStorage.getItem(userProfileKey);
+        if (!existingProfile) {
+          const initialProfile: UserProfile = {
+            ...SEED_PROFILE,
+            name: user.displayName || user.email?.split('@')[0] || 'Personal Account',
+            email: user.email || '',
+            photoURL: user.photoURL || undefined,
+            currency: '₹',
+            currencySymbol: '₹',
+          };
+          localStorage.setItem(userProfileKey, JSON.stringify(initialProfile));
+        }
+
+        // Migrate guest or legacy transactions to this authenticated user if first time
+        const userTxKey = this.getKey('TRANSACTIONS');
+        const existingUserTx = localStorage.getItem(userTxKey);
+        if (!existingUserTx) {
+          const guestTx =
+            localStorage.getItem('ais_guest_ais_spend_transactions_v1') ||
+            localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
+          if (guestTx) {
+            try {
+              const parsed = JSON.parse(guestTx);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                localStorage.setItem(userTxKey, JSON.stringify(parsed));
+              }
+            } catch (_) {}
+          } else {
+            localStorage.setItem(userTxKey, JSON.stringify(SEED_TRANSACTIONS));
+          }
+        }
+
+        // Trigger Firestore synchronization only on fresh login or user switch
+        if (prevId !== user.uid) {
+          setTimeout(() => {
+            if (this.currentUserId && !this.isDemoUser()) {
+              this.syncGenuineUserWithFirestore(this.currentUserId);
+            }
+          }, 100);
+        }
+      }
+    } else {
+      // LOGGED OUT: Reset all states
+      this.currentUserId = null;
+      this.currentUserEmail = null;
+      this.currentUserName = null;
+      this.currentUserPhoto = null;
+      this.currentProvider = null;
+      this.demoTransactions = null;
+      this.demoBudgets = null;
+      this.demoGoals = null;
+      this.demoProfile = null;
+      this.demoCategories = null;
+      this.demoSubscriptions = null;
+      this.demoLoans = null;
+      this.demoRecurring = null;
+      this.demoStatements = null;
+      this.demoNotifications = null;
+      this.demoInsights = null;
+
+      try {
+        localStorage.removeItem('ais_auth_current_user');
+      } catch (_) {}
+      this.cleanDemoLocalStorage();
+    }
+
+    if (prevId !== this.currentUserId) {
+      triggerUpdate();
+    }
+  }
+
+  getCurrentUser(): {
+    uid: string;
+    email: string | null;
+    displayName: string | null;
+    photoURL: string | null;
+    provider: string | null;
+  } | null {
+    if (!this.currentUserId) return null;
+    return {
+      uid: this.currentUserId,
+      email: this.currentUserEmail,
+      displayName: this.currentUserName,
+      photoURL: this.currentUserPhoto,
+      provider: this.currentProvider,
+    };
+  }
+
+  /**
+   * Update active user metadata in memory and session cache without resetting or wiping state
+   */
+  updateCurrentUserInfo(info: {
+    displayName?: string;
+    photoURL?: string | null;
+    email?: string;
+  }): void {
+    if (info.displayName !== undefined) {
+      this.currentUserName = info.displayName;
+    }
+    if (info.photoURL !== undefined) {
+      this.currentUserPhoto = info.photoURL;
+    }
+    if (info.email !== undefined) {
+      this.currentUserEmail = info.email;
+    }
+
+    try {
+      const saved = localStorage.getItem('ais_auth_current_user');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (info.displayName !== undefined) parsed.displayName = info.displayName;
+        if (info.photoURL !== undefined) parsed.photoURL = info.photoURL;
+        if (info.email !== undefined) parsed.email = info.email;
+        localStorage.setItem('ais_auth_current_user', JSON.stringify(parsed));
+      }
+    } catch (_) {}
+
+    // Update in-memory profile if demo
+    if (this.isDemoUser() && this.demoProfile) {
+      if (info.displayName) this.demoProfile.name = info.displayName;
+      if (info.photoURL !== undefined) this.demoProfile.photoURL = info.photoURL || undefined;
+      if (info.email) this.demoProfile.email = info.email;
+    }
+
+    triggerUpdate();
+  }
+
+  getCurrentUserId(): string | null {
+    return this.currentUserId;
+  }
+
+  isUserAuthenticated(): boolean {
+    return !!this.currentUserId;
+  }
+
+  private getKey(keyName: keyof typeof STORAGE_KEYS): string {
+    const base = STORAGE_KEYS[keyName];
+    if (this.currentUserId) {
+      return `ais_usr_${this.currentUserId}_${base}`;
+    }
+    return `ais_guest_${base}`;
+  }
+
   // --- USER PROFILE ---
   getProfile(): UserProfile {
+    if (this.isDemoUser() && this.demoProfile) {
+      return { ...this.demoProfile };
+    }
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.PROFILE);
+      const data = localStorage.getItem(this.getKey('PROFILE'));
       if (data) {
         const parsed = JSON.parse(data);
+        const canonicalSymbol = getCurrencySymbol(
+          parsed.currencySymbol || parsed.currency || SEED_PROFILE.currencySymbol || '₹'
+        );
         return {
           ...SEED_PROFILE,
           ...parsed,
-          name: parsed.name || (parsed as any).displayName || SEED_PROFILE.name || 'Ashwin Kumar',
-          currency: parsed.currency || SEED_PROFILE.currency || '₹',
-          currencySymbol: parsed.currencySymbol || parsed.currency || '₹',
+          photoURL: parsed.photoURL !== undefined ? (parsed.photoURL || undefined) : (this.currentUserPhoto || undefined),
+          phone: parsed.phone || undefined,
+          occupation: parsed.occupation || undefined,
+          dailySpendingAlert: {
+            enabled:
+              parsed.dailySpendingAlert?.enabled !== undefined
+                ? parsed.dailySpendingAlert.enabled
+                : (SEED_PROFILE.dailySpendingAlert?.enabled ?? true),
+            threshold:
+              parsed.dailySpendingAlert?.threshold !== undefined
+                ? parsed.dailySpendingAlert.threshold
+                : (SEED_PROFILE.dailySpendingAlert?.threshold ?? 2000),
+            targetGoalId:
+              parsed.dailySpendingAlert?.targetGoalId ||
+              SEED_PROFILE.dailySpendingAlert?.targetGoalId ||
+              'goal_01',
+            nudgeTone:
+              parsed.dailySpendingAlert?.nudgeTone ||
+              SEED_PROFILE.dailySpendingAlert?.nudgeTone ||
+              'gentle',
+            lastAlertDate: parsed.dailySpendingAlert?.lastAlertDate,
+          },
+          name:
+            parsed.name ||
+            this.currentUserName ||
+            (parsed as any).displayName ||
+            (this.isDemoUser() ? 'Ashwin Kumar' : (this.currentUserEmail?.split('@')[0] || 'Personal Account')),
+          email: parsed.email || this.currentUserEmail || (this.isDemoUser() ? SEED_PROFILE.email : ''),
+          currency: canonicalSymbol,
+          currencySymbol: canonicalSymbol,
         };
       }
     } catch (e) {
       console.warn('Failed to parse profile from storage', e);
     }
-    return SEED_PROFILE;
+    return {
+      ...SEED_PROFILE,
+      name:
+        this.currentUserName ||
+        (this.isDemoUser() ? SEED_PROFILE.name : (this.currentUserEmail?.split('@')[0] || 'Personal Account')),
+      email: this.currentUserEmail || (this.isDemoUser() ? SEED_PROFILE.email : ''),
+      photoURL: this.currentUserPhoto || undefined,
+      currency: getCurrencySymbol(SEED_PROFILE.currency),
+      currencySymbol: getCurrencySymbol(SEED_PROFILE.currencySymbol),
+    };
   }
 
   saveProfile(profile: UserProfile): void {
-    localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify(profile));
+    const canonicalSymbol = getCurrencySymbol(profile.currencySymbol || profile.currency || '₹');
+    const normalizedProfile: UserProfile = {
+      ...profile,
+      currency: canonicalSymbol,
+      currencySymbol: canonicalSymbol,
+    };
+    if (normalizedProfile.name) {
+      this.currentUserName = normalizedProfile.name;
+    }
+    if (normalizedProfile.photoURL !== undefined) {
+      this.currentUserPhoto = normalizedProfile.photoURL || null;
+    }
+    if (normalizedProfile.email) {
+      this.currentUserEmail = normalizedProfile.email;
+    }
+
+    try {
+      const saved = localStorage.getItem('ais_auth_current_user');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (normalizedProfile.name) parsed.displayName = normalizedProfile.name;
+        if (normalizedProfile.photoURL !== undefined) parsed.photoURL = normalizedProfile.photoURL;
+        if (normalizedProfile.email) parsed.email = normalizedProfile.email;
+        localStorage.setItem('ais_auth_current_user', JSON.stringify(parsed));
+      }
+    } catch (_) {}
+
+    if (this.isDemoUser()) {
+      this.demoProfile = normalizedProfile;
+      triggerUpdate();
+      return; // DO NOT WRITE TO DATABASE FOR DEMO USER
+    }
+    localStorage.setItem(this.getKey('PROFILE'), JSON.stringify(normalizedProfile));
     triggerUpdate();
+    this.saveProfileToFirestore(normalizedProfile);
   }
 
   // --- CATEGORIES ---
   getCategories(): Category[] {
+    if (this.isDemoUser()) {
+      if (!this.demoCategories) {
+        this.demoCategories = JSON.parse(JSON.stringify(DEFAULT_CATEGORIES));
+      }
+      return [...this.demoCategories];
+    }
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.CATEGORIES);
+      const data = localStorage.getItem(this.getKey('CATEGORIES'));
       if (data) return JSON.parse(data);
     } catch (e) {
       console.warn('Failed to parse categories from storage', e);
@@ -82,6 +477,18 @@ class StorageService {
   }
 
   saveCategory(cat: Category): void {
+    if (this.isDemoUser()) {
+      const cats = this.getCategories();
+      const idx = cats.findIndex((c) => c.id === cat.id);
+      if (idx >= 0) {
+        cats[idx] = cat;
+      } else {
+        cats.push(cat);
+      }
+      this.demoCategories = cats;
+      triggerUpdate();
+      return; // DO NOT WRITE TO DATABASE FOR DEMO USER
+    }
     const cats = this.getCategories();
     const idx = cats.findIndex((c) => c.id === cat.id);
     if (idx >= 0) {
@@ -89,51 +496,156 @@ class StorageService {
     } else {
       cats.push(cat);
     }
-    localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(cats));
+    localStorage.setItem(this.getKey('CATEGORIES'), JSON.stringify(cats));
     triggerUpdate();
   }
 
   deleteCategory(catId: string): void {
+    if (this.isDemoUser()) {
+      this.demoCategories = this.getCategories().filter((c) => c.id !== catId);
+      triggerUpdate();
+      return; // DO NOT WRITE TO DATABASE FOR DEMO USER
+    }
     const cats = this.getCategories().filter((c) => c.id !== catId);
-    localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(cats));
+    localStorage.setItem(this.getKey('CATEGORIES'), JSON.stringify(cats));
     triggerUpdate();
   }
 
   // --- TRANSACTIONS ---
   getTransactions(): Transaction[] {
+    if (this.isDemoUser()) {
+      if (!this.demoTransactions) {
+        // Fetch baseline demo transactions from initial datastore/seed into state
+        this.demoTransactions = JSON.parse(JSON.stringify(SEED_TRANSACTIONS));
+      }
+      return [...this.demoTransactions];
+    }
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
-      if (data) return JSON.parse(data);
+      const data = localStorage.getItem(this.getKey('TRANSACTIONS'));
+      if (data) {
+        const parsed = JSON.parse(data);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
     } catch (e) {
       console.warn('Failed to parse transactions from storage', e);
     }
-    // Initialize with seed transactions
+    // Check if guest has stored transactions to inherit
+    const guestStored = localStorage.getItem('ais_guest_ais_spend_transactions_v1');
+    if (guestStored) {
+      try {
+        const parsed = JSON.parse(guestStored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          this.saveAllTransactions(parsed);
+          return parsed;
+        }
+      } catch (_) {}
+    }
+    // Baseline seed data so ledger is never blank
     this.saveAllTransactions(SEED_TRANSACTIONS);
     return SEED_TRANSACTIONS;
   }
 
   saveTransaction(tx: Transaction): void {
+    if (this.isDemoUser()) {
+      const list = this.getTransactions();
+      const idx = list.findIndex((item) => item.id === tx.id);
+      if (idx >= 0) {
+        list[idx] = { ...tx, updatedAt: new Date().toISOString() };
+      } else {
+        list.unshift({
+          ...tx,
+          createdAt: tx.createdAt || new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+      }
+      this.demoTransactions = list;
+      triggerUpdate();
+
+      // In-memory alert check
+      if (tx.type === 'expense' || tx.type === 'loan_emi') {
+        try {
+          this.checkDailySpendingAlert(tx.date);
+        } catch (_) {}
+      }
+      return; // DO NOT WRITE TO DATABASE FOR DEMO USER
+    }
+
     const list = this.getTransactions();
     const idx = list.findIndex((item) => item.id === tx.id);
+    const updatedTx: Transaction = {
+      ...tx,
+      createdAt: tx.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
     if (idx >= 0) {
-      list[idx] = { ...tx, updatedAt: new Date().toISOString() };
+      list[idx] = updatedTx;
     } else {
-      list.unshift({
-        ...tx,
-        createdAt: tx.createdAt || new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
+      list.unshift(updatedTx);
     }
     this.saveAllTransactions(list);
+
+    // Save genuine user transaction to Firestore cloud database
+    this.saveTransactionToFirestore(updatedTx);
+
+    // Auto-check daily spending alert if this is an expense or loan EMI
+    if (tx.type === 'expense' || tx.type === 'loan_emi') {
+      try {
+        this.checkDailySpendingAlert(tx.date);
+      } catch (err) {
+        console.warn('Error checking daily spending alert:', err);
+      }
+    }
   }
 
   saveAllTransactions(transactions: Transaction[]): void {
-    localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(transactions));
+    if (this.isDemoUser()) {
+      this.demoTransactions = [...transactions];
+      triggerUpdate();
+      return; // DO NOT WRITE TO DATABASE FOR DEMO USER
+    }
+    localStorage.setItem(this.getKey('TRANSACTIONS'), JSON.stringify(transactions));
     triggerUpdate();
+    this.batchSaveTransactionsToFirestore(transactions);
   }
 
   deleteTransaction(id: string): void {
+    if (this.isDemoUser()) {
+      this.demoTransactions = this.getTransactions().filter((tx) => tx.id !== id);
+      triggerUpdate();
+      return; // DO NOT WRITE TO DATABASE FOR DEMO USER
+    }
     const list = this.getTransactions().filter((tx) => tx.id !== id);
+    this.saveAllTransactions(list);
+    this.deleteTransactionFromFirestore(id);
+  }
+
+  deleteTransactions(ids: string[]): void {
+    if (!ids || ids.length === 0) return;
+    const idSet = new Set(ids);
+    if (this.isDemoUser()) {
+      this.demoTransactions = this.getTransactions().filter((tx) => !idSet.has(tx.id));
+      triggerUpdate();
+      return; // DO NOT WRITE TO DATABASE FOR DEMO USER
+    }
+    const list = this.getTransactions().filter((tx) => !idSet.has(tx.id));
+    this.saveAllTransactions(list);
+    this.deleteTransactionsFromFirestore(ids);
+  }
+
+  convertPaiseToRupees(ids: string[]): void {
+    if (!ids || ids.length === 0) return;
+    const idSet = new Set(ids);
+    const list = this.getTransactions().map((tx) => {
+      if (idSet.has(tx.id)) {
+        return {
+          ...tx,
+          amount: Math.round((tx.amount / 100) * 100) / 100,
+        };
+      }
+      return tx;
+    });
     this.saveAllTransactions(list);
   }
 
@@ -173,8 +685,14 @@ class StorageService {
 
   // --- BUDGETS ---
   getBudgets(): Budget[] {
+    if (this.isDemoUser()) {
+      if (!this.demoBudgets) {
+        this.demoBudgets = JSON.parse(JSON.stringify(SEED_BUDGETS));
+      }
+      return [...this.demoBudgets];
+    }
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.BUDGETS);
+      const data = localStorage.getItem(this.getKey('BUDGETS'));
       if (data) return JSON.parse(data);
     } catch (e) {
       console.warn('Failed to parse budgets', e);
@@ -193,23 +711,47 @@ class StorageService {
     } else {
       list.push(budget);
     }
+    if (this.isDemoUser()) {
+      this.demoBudgets = list;
+      triggerUpdate();
+      return; // DO NOT WRITE TO DATABASE FOR DEMO USER
+    }
     this.saveBudgets(list);
+    this.saveBudgetToFirestore(budget);
   }
 
   saveBudgets(budgets: Budget[]): void {
-    localStorage.setItem(STORAGE_KEYS.BUDGETS, JSON.stringify(budgets));
+    if (this.isDemoUser()) {
+      this.demoBudgets = [...budgets];
+      triggerUpdate();
+      return; // DO NOT WRITE TO DATABASE FOR DEMO USER
+    }
+    localStorage.setItem(this.getKey('BUDGETS'), JSON.stringify(budgets));
     triggerUpdate();
+    this.batchSaveBudgetsToFirestore(budgets);
   }
 
   deleteBudget(id: string): void {
+    if (this.isDemoUser()) {
+      this.demoBudgets = this.getBudgets().filter((b) => b.id !== id);
+      triggerUpdate();
+      return; // DO NOT WRITE TO DATABASE FOR DEMO USER
+    }
     const list = this.getBudgets().filter((b) => b.id !== id);
     this.saveBudgets(list);
+    this.deleteBudgetFromFirestore(id);
   }
 
   // --- GOALS ---
   getGoals(): FinancialGoal[] {
+    if (this.isDemoUser()) {
+      if (!this.demoGoals) {
+        this.demoGoals = JSON.parse(JSON.stringify(SEED_GOALS));
+      }
+      return [...this.demoGoals];
+    }
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.GOALS);
+      const data = localStorage.getItem(this.getKey('GOALS'));
       if (data) return JSON.parse(data);
     } catch (e) {
       console.warn('Failed to parse goals', e);
@@ -226,17 +768,35 @@ class StorageService {
     } else {
       list.push(goal);
     }
+    if (this.isDemoUser()) {
+      this.demoGoals = list;
+      triggerUpdate();
+      return; // DO NOT WRITE TO DATABASE FOR DEMO USER
+    }
     this.saveGoals(list);
+    this.saveGoalToFirestore(goal);
   }
 
   saveGoals(goals: FinancialGoal[]): void {
-    localStorage.setItem(STORAGE_KEYS.GOALS, JSON.stringify(goals));
+    if (this.isDemoUser()) {
+      this.demoGoals = [...goals];
+      triggerUpdate();
+      return; // DO NOT WRITE TO DATABASE FOR DEMO USER
+    }
+    localStorage.setItem(this.getKey('GOALS'), JSON.stringify(goals));
     triggerUpdate();
+    this.batchSaveGoalsToFirestore(goals);
   }
 
   deleteGoal(id: string): void {
+    if (this.isDemoUser()) {
+      this.demoGoals = this.getGoals().filter((g) => g.id !== id);
+      triggerUpdate();
+      return; // DO NOT WRITE TO DATABASE FOR DEMO USER
+    }
     const list = this.getGoals().filter((g) => g.id !== id);
     this.saveGoals(list);
+    this.deleteGoalFromFirestore(id);
   }
 
   contributeToGoal(goalId: string, amount: number): void {
@@ -244,14 +804,26 @@ class StorageService {
     const goal = list.find((g) => g.id === goalId);
     if (goal) {
       goal.currentAmount = Math.min(goal.targetAmount, goal.currentAmount + amount);
+      if (this.isDemoUser()) {
+        this.demoGoals = list;
+        triggerUpdate();
+        return; // DO NOT WRITE TO DATABASE FOR DEMO USER
+      }
       this.saveGoals(list);
+      this.saveGoalToFirestore(goal);
     }
   }
 
   // --- SUBSCRIPTIONS ---
   getSubscriptions(): Subscription[] {
+    if (this.isDemoUser()) {
+      if (!this.demoSubscriptions) {
+        this.demoSubscriptions = JSON.parse(JSON.stringify(SEED_SUBSCRIPTIONS));
+      }
+      return [...this.demoSubscriptions];
+    }
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.SUBSCRIPTIONS);
+      const data = localStorage.getItem(this.getKey('SUBSCRIPTIONS'));
       if (data) return JSON.parse(data);
     } catch (e) {
       console.warn('Failed to parse subscriptions', e);
@@ -268,23 +840,44 @@ class StorageService {
     } else {
       list.push(sub);
     }
+    if (this.isDemoUser()) {
+      this.demoSubscriptions = list;
+      triggerUpdate();
+      return;
+    }
     this.saveSubscriptions(list);
   }
 
   saveSubscriptions(subs: Subscription[]): void {
-    localStorage.setItem(STORAGE_KEYS.SUBSCRIPTIONS, JSON.stringify(subs));
+    if (this.isDemoUser()) {
+      this.demoSubscriptions = [...subs];
+      triggerUpdate();
+      return;
+    }
+    localStorage.setItem(this.getKey('SUBSCRIPTIONS'), JSON.stringify(subs));
     triggerUpdate();
   }
 
   deleteSubscription(id: string): void {
+    if (this.isDemoUser()) {
+      this.demoSubscriptions = this.getSubscriptions().filter((s) => s.id !== id);
+      triggerUpdate();
+      return;
+    }
     const list = this.getSubscriptions().filter((s) => s.id !== id);
     this.saveSubscriptions(list);
   }
 
   // --- EMI / LOANS ---
   getEMILoans(): EMILoan[] {
+    if (this.isDemoUser()) {
+      if (!this.demoLoans) {
+        this.demoLoans = JSON.parse(JSON.stringify(SEED_EMI_LOANS));
+      }
+      return [...this.demoLoans];
+    }
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.EMI_LOANS);
+      const data = localStorage.getItem(this.getKey('EMI_LOANS'));
       if (data) return JSON.parse(data);
     } catch (e) {
       console.warn('Failed to parse EMI loans', e);
@@ -301,23 +894,145 @@ class StorageService {
     } else {
       list.push(loan);
     }
+    if (this.isDemoUser()) {
+      this.demoLoans = list;
+      triggerUpdate();
+      return;
+    }
     this.saveEMILoans(list);
   }
 
   saveEMILoans(loans: EMILoan[]): void {
-    localStorage.setItem(STORAGE_KEYS.EMI_LOANS, JSON.stringify(loans));
+    if (this.isDemoUser()) {
+      this.demoLoans = [...loans];
+      triggerUpdate();
+      return;
+    }
+    localStorage.setItem(this.getKey('EMI_LOANS'), JSON.stringify(loans));
     triggerUpdate();
   }
 
   deleteEMILoan(id: string): void {
+    if (this.isDemoUser()) {
+      this.demoLoans = this.getEMILoans().filter((l) => l.id !== id);
+      triggerUpdate();
+      return;
+    }
     const list = this.getEMILoans().filter((l) => l.id !== id);
     this.saveEMILoans(list);
   }
 
+  makeLoanPrepayment(loanId: string, amount: number): { remainingAmount: number; isSettled: boolean } {
+    const list = this.getEMILoans();
+    const loan = list.find((l) => l.id === loanId);
+    if (!loan) return { remainingAmount: 0, isSettled: false };
+
+    const newRemaining = Math.max(0, loan.remainingAmount - amount);
+    loan.remainingAmount = newRemaining;
+    loan.prepaymentsMade = (loan.prepaymentsMade || 0) + amount;
+
+    if (newRemaining <= 0) {
+      loan.remainingAmount = 0;
+      loan.paidMonths = loan.tenureMonths;
+    }
+
+    if (this.isDemoUser()) {
+      this.demoLoans = list;
+      triggerUpdate();
+      return { remainingAmount: newRemaining, isSettled: newRemaining <= 0 };
+    }
+
+    this.saveEMILoans(list);
+    return { remainingAmount: newRemaining, isSettled: newRemaining <= 0 };
+  }
+
+  // --- RECURRING SCHEDULES ---
+  getRecurringSchedules(): RecurringSchedule[] {
+    if (this.isDemoUser()) {
+      if (!this.demoRecurring) {
+        this.demoRecurring = JSON.parse(JSON.stringify(SEED_RECURRING_SCHEDULES));
+      }
+      return [...this.demoRecurring];
+    }
+    try {
+      const data = localStorage.getItem(this.getKey('RECURRING_SCHEDULES'));
+      if (data) return JSON.parse(data);
+    } catch (e) {
+      console.warn('Failed to parse recurring schedules', e);
+    }
+    this.saveRecurringSchedules(SEED_RECURRING_SCHEDULES);
+    return SEED_RECURRING_SCHEDULES;
+  }
+
+  saveRecurringSchedule(schedule: RecurringSchedule): void {
+    const list = this.getRecurringSchedules();
+    const idx = list.findIndex((s) => s.id === schedule.id);
+    if (idx >= 0) {
+      list[idx] = { ...schedule, updatedAt: new Date().toISOString() };
+    } else {
+      list.unshift({
+        ...schedule,
+        createdAt: schedule.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+    if (this.isDemoUser()) {
+      this.demoRecurring = list;
+      triggerUpdate();
+      return;
+    }
+    this.saveRecurringSchedules(list);
+  }
+
+  saveRecurringSchedules(schedules: RecurringSchedule[]): void {
+    if (this.isDemoUser()) {
+      this.demoRecurring = [...schedules];
+      triggerUpdate();
+      return;
+    }
+    localStorage.setItem(this.getKey('RECURRING_SCHEDULES'), JSON.stringify(schedules));
+    triggerUpdate();
+  }
+
+  deleteRecurringSchedule(id: string): void {
+    if (this.isDemoUser()) {
+      this.demoRecurring = this.getRecurringSchedules().filter((s) => s.id !== id);
+      triggerUpdate();
+      return;
+    }
+    const list = this.getRecurringSchedules().filter((s) => s.id !== id);
+    this.saveRecurringSchedules(list);
+  }
+
+  toggleRecurringScheduleStatus(id: string, status?: 'active' | 'paused' | 'completed'): void {
+    const list = this.getRecurringSchedules();
+    const item = list.find((s) => s.id === id);
+    if (item) {
+      if (status) {
+        item.status = status;
+      } else {
+        item.status = item.status === 'active' ? 'paused' : 'active';
+      }
+      item.updatedAt = new Date().toISOString();
+      if (this.isDemoUser()) {
+        this.demoRecurring = list;
+        triggerUpdate();
+        return;
+      }
+      this.saveRecurringSchedules(list);
+    }
+  }
+
   // --- NOTIFICATIONS ---
   getNotifications(): NotificationItem[] {
+    if (this.isDemoUser()) {
+      if (!this.demoNotifications) {
+        this.demoNotifications = JSON.parse(JSON.stringify(SEED_NOTIFICATIONS));
+      }
+      return [...this.demoNotifications];
+    }
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.NOTIFICATIONS);
+      const data = localStorage.getItem(this.getKey('NOTIFICATIONS'));
       if (data) return JSON.parse(data);
     } catch (e) {
       console.warn('Failed to parse notifications', e);
@@ -330,7 +1045,12 @@ class StorageService {
     const item = list.find((n) => n.id === id);
     if (item) {
       item.read = true;
-      localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(list));
+      if (this.isDemoUser()) {
+        this.demoNotifications = list;
+        triggerUpdate();
+        return;
+      }
+      localStorage.setItem(this.getKey('NOTIFICATIONS'), JSON.stringify(list));
       triggerUpdate();
     }
   }
@@ -338,14 +1058,25 @@ class StorageService {
   addNotification(notif: NotificationItem): void {
     const list = this.getNotifications();
     list.unshift(notif);
-    localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(list));
+    if (this.isDemoUser()) {
+      this.demoNotifications = list;
+      triggerUpdate();
+      return;
+    }
+    localStorage.setItem(this.getKey('NOTIFICATIONS'), JSON.stringify(list));
     triggerUpdate();
   }
 
   // --- STATEMENTS ---
   getStatements(): StatementUpload[] {
+    if (this.isDemoUser()) {
+      if (!this.demoStatements) {
+        this.demoStatements = [];
+      }
+      return [...this.demoStatements];
+    }
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.STATEMENTS);
+      const data = localStorage.getItem(this.getKey('STATEMENTS'));
       if (data) return JSON.parse(data);
     } catch (e) {
       console.warn('Failed to parse statements', e);
@@ -356,20 +1087,36 @@ class StorageService {
   saveStatement(stmt: StatementUpload): void {
     const list = this.getStatements();
     list.unshift(stmt);
-    localStorage.setItem(STORAGE_KEYS.STATEMENTS, JSON.stringify(list));
+    if (this.isDemoUser()) {
+      this.demoStatements = list;
+      triggerUpdate();
+      return;
+    }
+    localStorage.setItem(this.getKey('STATEMENTS'), JSON.stringify(list));
     triggerUpdate();
   }
 
   deleteStatement(id: string): void {
+    if (this.isDemoUser()) {
+      this.demoStatements = this.getStatements().filter((s) => s.id !== id);
+      triggerUpdate();
+      return;
+    }
     const list = this.getStatements().filter((s) => s.id !== id);
-    localStorage.setItem(STORAGE_KEYS.STATEMENTS, JSON.stringify(list));
+    localStorage.setItem(this.getKey('STATEMENTS'), JSON.stringify(list));
     triggerUpdate();
   }
 
   // --- SAVED AI INSIGHTS ---
   getInsights(): AIInsight[] {
+    if (this.isDemoUser()) {
+      if (!this.demoInsights) {
+        this.demoInsights = [];
+      }
+      return [...this.demoInsights];
+    }
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.INSIGHTS);
+      const data = localStorage.getItem(this.getKey('INSIGHTS'));
       if (data) return JSON.parse(data);
     } catch (e) {
       console.warn('Failed to parse insights', e);
@@ -380,8 +1127,242 @@ class StorageService {
   saveInsight(insight: AIInsight): void {
     const list = this.getInsights();
     list.unshift(insight);
-    localStorage.setItem(STORAGE_KEYS.INSIGHTS, JSON.stringify(list));
+    if (this.isDemoUser()) {
+      this.demoInsights = list;
+      triggerUpdate();
+      return;
+    }
+    localStorage.setItem(this.getKey('INSIGHTS'), JSON.stringify(list));
     triggerUpdate();
+  }
+
+  // --- CLOUD FIRESTORE PERSISTENCE (GENUINE USERS ONLY) ---
+  async syncGenuineUserWithFirestore(userId: string): Promise<void> {
+    if (!userId || this.isDemoUser()) return;
+    try {
+      // 1. Transactions Collection
+      const txCol = collection(db, 'users', userId, 'transactions');
+      const txSnap = await getDocs(txCol);
+      if (!txSnap.empty) {
+        const remoteTxs: Transaction[] = [];
+        txSnap.forEach((docSnap) => {
+          remoteTxs.push(docSnap.data() as Transaction);
+        });
+        remoteTxs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        localStorage.setItem(this.getKey('TRANSACTIONS'), JSON.stringify(remoteTxs));
+        triggerUpdate();
+      } else {
+        // First-time genuine user: populate Firestore with user's baseline ledger
+        const existingLocal = this.getTransactions();
+        const txsToSeed = existingLocal.length > 0 ? existingLocal : SEED_TRANSACTIONS;
+        await this.batchSaveTransactionsToFirestore(txsToSeed);
+      }
+
+      // 2. Budgets Collection
+      const budgetCol = collection(db, 'users', userId, 'budgets');
+      const budgetSnap = await getDocs(budgetCol);
+      if (!budgetSnap.empty) {
+        const remoteBudgets: Budget[] = [];
+        budgetSnap.forEach((docSnap) => {
+          remoteBudgets.push(docSnap.data() as Budget);
+        });
+        localStorage.setItem(this.getKey('BUDGETS'), JSON.stringify(remoteBudgets));
+        triggerUpdate();
+      } else {
+        await this.batchSaveBudgetsToFirestore(SEED_BUDGETS);
+      }
+
+      // 3. Goals Collection
+      const goalsCol = collection(db, 'users', userId, 'goals');
+      const goalsSnap = await getDocs(goalsCol);
+      if (!goalsSnap.empty) {
+        const remoteGoals: FinancialGoal[] = [];
+        goalsSnap.forEach((docSnap) => {
+          remoteGoals.push(docSnap.data() as FinancialGoal);
+        });
+        localStorage.setItem(this.getKey('GOALS'), JSON.stringify(remoteGoals));
+        triggerUpdate();
+      } else {
+        await this.batchSaveGoalsToFirestore(SEED_GOALS);
+      }
+
+      // 4. Profile Document
+      const profileDocRef = doc(db, 'users', userId, 'profile', 'main');
+      const profileSnap = await getDoc(profileDocRef);
+      if (profileSnap.exists()) {
+        const remoteProfile = profileSnap.data() as UserProfile;
+        localStorage.setItem(this.getKey('PROFILE'), JSON.stringify(remoteProfile));
+        triggerUpdate();
+      } else {
+        // If profile/main does not exist yet, check /users/{userId} document
+        const userDocRef = doc(db, 'users', userId);
+        const userSnap = await getDoc(userDocRef);
+        if (userSnap.exists()) {
+          const uData = userSnap.data();
+          const localProfile = this.getProfile();
+          const mergedProfile: UserProfile = {
+            ...localProfile,
+            name: uData.displayName || localProfile.name,
+            email: uData.email || localProfile.email,
+            photoURL: uData.photoURL || localProfile.photoURL,
+            currency: uData.currency || localProfile.currency,
+            monthlyIncome: uData.monthlyIncome || localProfile.monthlyIncome,
+          };
+          localStorage.setItem(this.getKey('PROFILE'), JSON.stringify(mergedProfile));
+          triggerUpdate();
+        }
+      }
+    } catch (err) {
+      console.warn('Firestore cloud sync notice:', err);
+    }
+  }
+
+  private async saveTransactionToFirestore(tx: Transaction): Promise<void> {
+    if (!this.currentUserId || this.isDemoUser()) return;
+    try {
+      await setDoc(doc(db, 'users', this.currentUserId, 'transactions', tx.id), tx, { merge: true });
+    } catch (err) {
+      console.warn('Failed to save transaction to Firestore:', err);
+    }
+  }
+
+  private async deleteTransactionFromFirestore(txId: string): Promise<void> {
+    if (!this.currentUserId || this.isDemoUser()) return;
+    try {
+      await deleteDoc(doc(db, 'users', this.currentUserId, 'transactions', txId));
+    } catch (err) {
+      console.warn('Failed to delete transaction from Firestore:', err);
+    }
+  }
+
+  private async deleteTransactionsFromFirestore(txIds: string[]): Promise<void> {
+    if (!this.currentUserId || this.isDemoUser() || !txIds.length) return;
+    try {
+      const batch = writeBatch(db);
+      for (const id of txIds) {
+        batch.delete(doc(db, 'users', this.currentUserId, 'transactions', id));
+      }
+      await batch.commit();
+    } catch (err) {
+      console.warn('Failed to batch delete transactions from Firestore:', err);
+    }
+  }
+
+  private async batchSaveTransactionsToFirestore(transactions: Transaction[]): Promise<void> {
+    if (!this.currentUserId || this.isDemoUser() || !transactions.length) return;
+    try {
+      const batch = writeBatch(db);
+      // Firestore batch limit is 500 operations
+      const slice = transactions.slice(0, 450);
+      for (const tx of slice) {
+        batch.set(doc(db, 'users', this.currentUserId, 'transactions', tx.id), tx, { merge: true });
+      }
+      await batch.commit();
+    } catch (err) {
+      console.warn('Failed to batch save transactions to Firestore:', err);
+    }
+  }
+
+  private async saveBudgetToFirestore(budget: Budget): Promise<void> {
+    if (!this.currentUserId || this.isDemoUser()) return;
+    try {
+      await setDoc(doc(db, 'users', this.currentUserId, 'budgets', budget.id), budget, { merge: true });
+    } catch (err) {
+      console.warn('Failed to save budget to Firestore:', err);
+    }
+  }
+
+  private async deleteBudgetFromFirestore(budgetId: string): Promise<void> {
+    if (!this.currentUserId || this.isDemoUser()) return;
+    try {
+      await deleteDoc(doc(db, 'users', this.currentUserId, 'budgets', budgetId));
+    } catch (err) {
+      console.warn('Failed to delete budget from Firestore:', err);
+    }
+  }
+
+  private async batchSaveBudgetsToFirestore(budgets: Budget[]): Promise<void> {
+    if (!this.currentUserId || this.isDemoUser() || !budgets.length) return;
+    try {
+      const batch = writeBatch(db);
+      for (const b of budgets) {
+        batch.set(doc(db, 'users', this.currentUserId, 'budgets', b.id), b, { merge: true });
+      }
+      await batch.commit();
+    } catch (err) {
+      console.warn('Failed to batch save budgets to Firestore:', err);
+    }
+  }
+
+  private async saveGoalToFirestore(goal: FinancialGoal): Promise<void> {
+    if (!this.currentUserId || this.isDemoUser()) return;
+    try {
+      await setDoc(doc(db, 'users', this.currentUserId, 'goals', goal.id), goal, { merge: true });
+    } catch (err) {
+      console.warn('Failed to save goal to Firestore:', err);
+    }
+  }
+
+  private async deleteGoalFromFirestore(goalId: string): Promise<void> {
+    if (!this.currentUserId || this.isDemoUser()) return;
+    try {
+      await deleteDoc(doc(db, 'users', this.currentUserId, 'goals', goalId));
+    } catch (err) {
+      console.warn('Failed to delete goal from Firestore:', err);
+    }
+  }
+
+  private async batchSaveGoalsToFirestore(goals: FinancialGoal[]): Promise<void> {
+    if (!this.currentUserId || this.isDemoUser() || !goals.length) return;
+    try {
+      const batch = writeBatch(db);
+      for (const g of goals) {
+        batch.set(doc(db, 'users', this.currentUserId, 'goals', g.id), g, { merge: true });
+      }
+      await batch.commit();
+    } catch (err) {
+      console.warn('Failed to batch save goals to Firestore:', err);
+    }
+  }
+
+  private async saveProfileToFirestore(profile: UserProfile): Promise<void> {
+    if (!this.currentUserId || this.isDemoUser()) return;
+    try {
+      // Deep clone and clean all undefined properties so Firestore SDK does not reject with error
+      const cleanProfile: Record<string, any> = {};
+      for (const [key, value] of Object.entries(profile)) {
+        if (value !== undefined) {
+          if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+            const cleanSub: Record<string, any> = {};
+            for (const [subK, subV] of Object.entries(value)) {
+              if (subV !== undefined) cleanSub[subK] = subV;
+            }
+            cleanProfile[key] = cleanSub;
+          } else {
+            cleanProfile[key] = value;
+          }
+        }
+      }
+
+      await setDoc(doc(db, 'users', this.currentUserId, 'profile', 'main'), cleanProfile, { merge: true });
+
+      // Also update top-level /users/{userId} document for direct profile access
+      await setDoc(
+        doc(db, 'users', this.currentUserId),
+        {
+          uid: this.currentUserId,
+          displayName: profile.name || '',
+          email: profile.email || '',
+          ...(profile.photoURL && profile.photoURL.length <= 2000 ? { photoURL: profile.photoURL } : {}),
+          currency: profile.currency,
+          monthlyIncome: profile.monthlyIncome,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    } catch (err) {
+      console.warn('Failed to save profile to Firestore:', err);
+    }
   }
 
   // --- ANALYTICS CALCULATIONS ---
@@ -471,6 +1452,187 @@ class StorageService {
       paymentMethodSpending,
       dailySpending,
       transactions: txs,
+    };
+  }
+
+  // --- DAILY SPENDING & GOAL NUDGE ALERTS ---
+
+  /**
+   * Calculates total expenses & loan EMIs for a specific day (YYYY-MM-DD).
+   */
+  getDailySpending(dateStr?: string): {
+    total: number;
+    count: number;
+    transactions: Transaction[];
+    date: string;
+  } {
+    const targetDate = dateStr || new Date().toISOString().slice(0, 10);
+    const transactions = this.getTransactions().filter(
+      (t) => t.date === targetDate && (t.type === 'expense' || t.type === 'loan_emi')
+    );
+    const total = transactions.reduce((sum, t) => sum + t.amount, 0);
+    return { total, count: transactions.length, transactions, date: targetDate };
+  }
+
+  /**
+   * Gets today's spending, or falls back to the latest active spending date (ideal for demo data).
+   */
+  getTodayOrLatestDailySpending(): {
+    date: string;
+    total: number;
+    count: number;
+    transactions: Transaction[];
+    isToday: boolean;
+  } {
+    const today = new Date().toISOString().slice(0, 10);
+    const todayResult = this.getDailySpending(today);
+    if (todayResult.count > 0) {
+      return {
+        date: today,
+        total: todayResult.total,
+        count: todayResult.count,
+        transactions: todayResult.transactions,
+        isToday: true,
+      };
+    }
+
+    // In demo mode or if today is empty, find the most recent expense date
+    const allExpenses = this.getTransactions()
+      .filter((t) => t.type === 'expense' || t.type === 'loan_emi')
+      .sort((a, b) => b.date.localeCompare(a.date));
+
+    if (allExpenses.length > 0) {
+      const latestDate = allExpenses[0].date;
+      const latestResult = this.getDailySpending(latestDate);
+      return {
+        date: latestDate,
+        total: latestResult.total,
+        count: latestResult.count,
+        transactions: latestResult.transactions,
+        isToday: false,
+      };
+    }
+
+    return { date: today, total: 0, count: 0, transactions: [], isToday: true };
+  }
+
+  /**
+   * Checks whether spending on dateStr exceeds the user's configured daily threshold,
+   * creating a compassionate, goal-oriented notification when breached.
+   */
+  checkDailySpendingAlert(
+    dateStr?: string,
+    forceCreateNotification = false
+  ): {
+    enabled: boolean;
+    exceeded: boolean;
+    spent: number;
+    threshold: number;
+    overAmount: number;
+    targetGoal?: FinancialGoal;
+    notificationCreated: boolean;
+    nudgeMessage?: string;
+  } {
+    const profile = this.getProfile();
+    const alertSetting = profile.dailySpendingAlert;
+
+    if (!alertSetting || !alertSetting.enabled || !alertSetting.threshold || alertSetting.threshold <= 0) {
+      return {
+        enabled: false,
+        exceeded: false,
+        spent: 0,
+        threshold: alertSetting?.threshold || 0,
+        overAmount: 0,
+        notificationCreated: false,
+      };
+    }
+
+    const targetDate = dateStr || new Date().toISOString().slice(0, 10);
+    const { total: spent } = this.getDailySpending(targetDate);
+    const threshold = alertSetting.threshold;
+
+    if (spent <= threshold && !forceCreateNotification) {
+      return {
+        enabled: true,
+        exceeded: false,
+        spent,
+        threshold,
+        overAmount: 0,
+        notificationCreated: false,
+      };
+    }
+
+    const overAmount = Math.max(0, spent - threshold);
+    const goals = this.getGoals();
+    let targetGoal: FinancialGoal | undefined;
+
+    if (alertSetting.targetGoalId && alertSetting.targetGoalId !== 'all') {
+      targetGoal = goals.find((g) => g.id === alertSetting.targetGoalId);
+    }
+    if (!targetGoal && goals.length > 0) {
+      targetGoal = goals[0];
+    }
+
+    const goalName = targetGoal ? targetGoal.name : 'Primary Savings';
+    const goalPercent =
+      targetGoal && targetGoal.targetAmount > 0
+        ? Math.round((targetGoal.currentAmount / targetGoal.targetAmount) * 100)
+        : 0;
+
+    const sym = profile.currencySymbol || '₹';
+
+    let nudgeMessage = '';
+    const tone = alertSetting.nudgeTone || 'gentle';
+
+    if (tone === 'mindful') {
+      nudgeMessage = `Mindful Check-in: Today's spending has reached ${sym}${spent.toLocaleString()}, which is ${sym}${overAmount.toLocaleString()} over your daily target of ${sym}${threshold.toLocaleString()}. Pausing non-essential spends for the rest of today helps protect your '${goalName}' goal (currently ${goalPercent}% completed)!`;
+    } else if (tone === 'motivational') {
+      nudgeMessage = `Goal Nudge: You're ${sym}${overAmount.toLocaleString()} past your daily threshold of ${sym}${threshold.toLocaleString()} (${sym}${spent.toLocaleString()} total). Every conscious pause between now and midnight preserves funds directly for '${goalName}'!`;
+    } else {
+      // Gentle (default)
+      nudgeMessage = `Gentle Nudge: You've spent ${sym}${spent.toLocaleString()} today, crossing your daily limit of ${sym}${threshold.toLocaleString()}. Taking a mindful breather from optional purchases today keeps your '${goalName}' comfortably on track! 🎯`;
+    }
+
+    // Check if we already notified for this target date
+    const existingNotifs = this.getNotifications();
+    const alreadyNotified = existingNotifs.some(
+      (n) => n.type === 'daily_limit_exceeded' && n.date.startsWith(targetDate)
+    );
+
+    let notificationCreated = false;
+    if (!alreadyNotified || forceCreateNotification) {
+      const notifId = `notif_daily_limit_${targetDate}_${Date.now()}`;
+      const notif: NotificationItem = {
+        id: notifId,
+        title: 'Daily Spending Limit Nudge 🎯',
+        message: nudgeMessage,
+        type: 'daily_limit_exceeded',
+        date: new Date().toISOString(),
+        read: false,
+        actionUrl: '/settings',
+        goalName,
+        overAmount,
+      };
+      this.addNotification(notif);
+      notificationCreated = true;
+
+      // Update profile lastAlertDate
+      profile.dailySpendingAlert = {
+        ...alertSetting,
+        lastAlertDate: targetDate,
+      };
+      this.saveProfile(profile);
+    }
+
+    return {
+      enabled: true,
+      exceeded: true,
+      spent,
+      threshold,
+      overAmount,
+      targetGoal,
+      notificationCreated,
+      nudgeMessage,
     };
   }
 
@@ -586,16 +1748,17 @@ class StorageService {
 
   // --- RESET & EXPORT ---
   resetToDemoData(): void {
-    localStorage.removeItem(STORAGE_KEYS.TRANSACTIONS);
-    localStorage.removeItem(STORAGE_KEYS.CATEGORIES);
-    localStorage.removeItem(STORAGE_KEYS.BUDGETS);
-    localStorage.removeItem(STORAGE_KEYS.GOALS);
-    localStorage.removeItem(STORAGE_KEYS.SUBSCRIPTIONS);
-    localStorage.removeItem(STORAGE_KEYS.PROFILE);
-    localStorage.removeItem(STORAGE_KEYS.EMI_LOANS);
-    localStorage.removeItem(STORAGE_KEYS.NOTIFICATIONS);
-    localStorage.removeItem(STORAGE_KEYS.STATEMENTS);
-    localStorage.removeItem(STORAGE_KEYS.INSIGHTS);
+    localStorage.removeItem(this.getKey('TRANSACTIONS'));
+    localStorage.removeItem(this.getKey('CATEGORIES'));
+    localStorage.removeItem(this.getKey('BUDGETS'));
+    localStorage.removeItem(this.getKey('GOALS'));
+    localStorage.removeItem(this.getKey('SUBSCRIPTIONS'));
+    localStorage.removeItem(this.getKey('PROFILE'));
+    localStorage.removeItem(this.getKey('EMI_LOANS'));
+    localStorage.removeItem(this.getKey('NOTIFICATIONS'));
+    localStorage.removeItem(this.getKey('STATEMENTS'));
+    localStorage.removeItem(this.getKey('INSIGHTS'));
+    localStorage.removeItem(this.getKey('RECURRING_SCHEDULES'));
 
     this.saveProfile(SEED_PROFILE);
     this.saveAllTransactions(SEED_TRANSACTIONS);
@@ -603,8 +1766,8 @@ class StorageService {
     this.saveGoals(SEED_GOALS);
     this.saveSubscriptions(SEED_SUBSCRIPTIONS);
     this.saveEMILoans(SEED_EMI_LOANS);
-    localStorage.setItem(STORAGE_KEYS.CATEGORIES, JSON.stringify(DEFAULT_CATEGORIES));
-    localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(SEED_NOTIFICATIONS));
+    localStorage.setItem(this.getKey('CATEGORIES'), JSON.stringify(DEFAULT_CATEGORIES));
+    localStorage.setItem(this.getKey('NOTIFICATIONS'), JSON.stringify(SEED_NOTIFICATIONS));
     triggerUpdate();
   }
 

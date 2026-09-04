@@ -206,28 +206,55 @@ export class TransactionParser {
   }
 
   /**
-   * Robust numeric amount cleaner handling currency symbols, commas, and negative signs / parentheses.
+   * Robust numeric amount cleaner handling currency symbols, commas, and negative signs / parentheses,
+   * preserving exact decimal points (e.g. 1890.50 -> 1890.50, not 189050!).
    */
-  static parseAmount(val: any): { amount: number; isNegative: boolean } {
+  static parseAmount(val: any, isPaise = false): { amount: number; isNegative: boolean } {
     if (typeof val === 'number') {
-      return { amount: Math.abs(val), isNegative: val < 0 };
+      if (isNaN(val)) return { amount: 0, isNegative: false };
+      const isNeg = val < 0;
+      let amt = Math.abs(val);
+      if (isPaise) amt = amt / 100;
+      return { amount: Math.round(amt * 100) / 100, isNegative: isNeg };
     }
     if (!val) return { amount: 0, isNegative: false };
 
     let str = String(val).trim();
-    let isNegative = str.startsWith('-') || (str.startsWith('(') && str.endsWith(')'));
+    if (!str) return { amount: 0, isNegative: false };
 
-    // Remove currency symbols, commas, spaces, quotes, etc.
-    str = str.replace(/[₹$€£Rs\.INR\s,"'()]/gi, '');
+    let isNegative =
+      str.startsWith('-') ||
+      str.endsWith('-') ||
+      (str.startsWith('(') && str.endsWith(')')) ||
+      /\b(dr|debit)\b/i.test(str);
 
-    // If string has minus sign
+    // Remove words like INR, USD, EUR, GBP, Rs, Rs., paise, etc.
+    str = str.replace(/\b(?:INR|USD|EUR|GBP|Rs|RS|paise|paisa|pts)\b/gi, '');
+
+    // Remove single currency characters, quotes, parens, spaces — but PRESERVE '.'
+    str = str.replace(/[₹$€£"'()\s]/g, '');
+
+    // Remove negative signs after detecting isNegative
     if (str.includes('-')) {
       isNegative = true;
       str = str.replace(/-/g, '');
     }
 
-    const amount = parseFloat(str) || 0;
-    return { amount: Math.abs(amount), isNegative };
+    // Remove thousand separator commas (e.g., "1,890.50" or "1,25,000.00" -> "1890.50" or "125000.00")
+    str = str.replace(/,/g, '');
+
+    let amount = parseFloat(str);
+    if (isNaN(amount)) amount = 0;
+    amount = Math.abs(amount);
+
+    if (isPaise) {
+      amount = amount / 100;
+    }
+
+    // Round to 2 decimal places
+    amount = Math.round(amount * 100) / 100;
+
+    return { amount, isNegative };
   }
 
   /**
@@ -261,6 +288,10 @@ export class TransactionParser {
       tags: -1,
     };
 
+    let isDebitPaise = false;
+    let isCreditPaise = false;
+    let isAmountPaise = false;
+
     for (let r = 0; r < Math.min(rows.length, 15); r++) {
       const row = rows[r].map((cell) => (cell || '').toLowerCase().trim());
       
@@ -277,11 +308,20 @@ export class TransactionParser {
           } else if (/(^|\b)(narration|description|particulars|merchant|details|payee|recipient|remarks|transaction\s*details|note|title)(\b|$)/i.test(colName)) {
             if (colMap.desc === -1) colMap.desc = cIdx;
           } else if (/(^|\b)(debit|withdrawal|dr\s*amount|debit\s*amount|outflow|spent|dr)(\b|$)/i.test(colName)) {
-            if (colMap.debit === -1) colMap.debit = cIdx;
+            if (colMap.debit === -1) {
+              colMap.debit = cIdx;
+              if (/paise|paisa/i.test(colName)) isDebitPaise = true;
+            }
           } else if (/(^|\b)(credit|deposit|cr\s*amount|credit\s*amount|inflow|received|income|cr)(\b|$)/i.test(colName)) {
-            if (colMap.credit === -1) colMap.credit = cIdx;
+            if (colMap.credit === -1) {
+              colMap.credit = cIdx;
+              if (/paise|paisa/i.test(colName)) isCreditPaise = true;
+            }
           } else if (/(^|\b)(amount|txn\s*amount|transaction\s*amount|net\s*amount|amt|total)(\b|$)/i.test(colName)) {
-            if (colMap.amount === -1) colMap.amount = cIdx;
+            if (colMap.amount === -1) {
+              colMap.amount = cIdx;
+              if (/paise|paisa/i.test(colName)) isAmountPaise = true;
+            }
           } else if (/(^|\b)(type|dr\/cr|cr\/dr|d\/c|c\/d|entry\s*type|transaction\s*type)(\b|$)/i.test(colName)) {
             if (colMap.type === -1) colMap.type = cIdx;
           } else if (/(^|\b)(category|category\s*name|cat|expense\s*category)(\b|$)/i.test(colName)) {
@@ -347,8 +387,8 @@ export class TransactionParser {
       let isNegative = false;
       let determinedType: TransactionType = 'expense';
 
-      const debitParsed = rawDebit ? this.parseAmount(rawDebit) : null;
-      const creditParsed = rawCredit ? this.parseAmount(rawCredit) : null;
+      const debitParsed = rawDebit ? this.parseAmount(rawDebit, isDebitPaise) : null;
+      const creditParsed = rawCredit ? this.parseAmount(rawCredit, isCreditPaise) : null;
 
       if (debitParsed && debitParsed.amount > 0) {
         amount = debitParsed.amount;
@@ -357,7 +397,7 @@ export class TransactionParser {
         amount = creditParsed.amount;
         determinedType = 'income';
       } else {
-        const amtParsed = this.parseAmount(rawAmount);
+        const amtParsed = this.parseAmount(rawAmount, isAmountPaise);
         amount = amtParsed.amount;
         isNegative = amtParsed.isNegative;
 

@@ -60,22 +60,22 @@ export const InsightsView: React.FC<InsightsViewProps> = ({
   };
 
   return (
-    <div className="space-y-6 pb-12">
+    <div className="space-y-5 sm:space-y-6 pb-6 sm:pb-8">
       {/* Top Banner */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
             AI Financial Insights & Stories
           </h1>
           <p className="text-xs text-gray-400 mt-0.5">
-            Narrative financial intelligence, behavioral personality analysis, and automated money-leak detection.
+            Narrative financial intelligence, behavioral spending analysis, and automated budget recommendations.
           </p>
         </div>
 
         <button
           onClick={handleRefresh}
           disabled={refreshing}
-          className="flex h-9 items-center gap-1.5 rounded-xl bg-blue-600 px-4 text-xs font-bold text-white shadow-xs hover:bg-blue-500 disabled:opacity-50"
+          className="flex h-9 items-center gap-1.5 rounded-xl bg-blue-600 px-4 text-xs font-bold text-white shadow-xs hover:bg-blue-500 disabled:opacity-50 cursor-pointer self-start sm:self-auto"
         >
           <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
           <span>Regenerate Insights</span>
@@ -83,7 +83,7 @@ export const InsightsView: React.FC<InsightsViewProps> = ({
       </div>
 
       {/* Monthly Narrative Story Card */}
-      <div className="rounded-xl border border-[#262626] bg-[#141414] p-6 text-white shadow-xl">
+      <div className="rounded-xl border border-[#262626] bg-[#141414] p-4 sm:p-5 lg:p-6 text-white shadow-xl">
         <div className="flex items-center gap-2.5 text-xs font-bold text-blue-400 uppercase tracking-wider mb-2">
           <BookOpen size={16} />
           <span>The Story of Your August 2026 Finances</span>
@@ -110,7 +110,7 @@ export const InsightsView: React.FC<InsightsViewProps> = ({
       </div>
 
       {/* Categorized AI Insights Feed */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5">
         {insights.map((ins) => {
           let badgeColor = 'bg-blue-500/10 text-blue-400 border border-blue-500/20';
           let borderHighlight = 'border-[#262626]';
@@ -129,7 +129,7 @@ export const InsightsView: React.FC<InsightsViewProps> = ({
           return (
             <div
               key={ins.id}
-              className={`rounded-xl border ${borderHighlight} bg-[#141414] p-5 shadow-xs flex flex-col justify-between`}
+              className={`rounded-xl border ${borderHighlight} bg-[#141414] p-4 sm:p-5 shadow-xs flex flex-col justify-between`}
             >
               <div>
                 <div className="flex items-center justify-between border-b border-[#262626] pb-3">

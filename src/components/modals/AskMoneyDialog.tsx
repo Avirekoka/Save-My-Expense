@@ -13,6 +13,7 @@ import { aiService } from '../../services/ai/ai.service';
 import { storageService } from '../../services/storage/storage.service';
 import { Transaction, AskMoneyResponse } from '../../types';
 import { formatCurrency, formatDate } from '../../utils/formatters';
+import { useScrollLock } from '../../hooks/useScrollLock';
 
 interface AskMoneyDialogProps {
   isOpen: boolean;
@@ -25,6 +26,8 @@ export const AskMoneyDialog: React.FC<AskMoneyDialogProps> = ({
   onClose,
   currencySymbol,
 }) => {
+  useScrollLock(isOpen);
+
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<AskMoneyResponse | null>(null);

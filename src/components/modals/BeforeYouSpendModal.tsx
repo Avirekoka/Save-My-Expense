@@ -13,6 +13,7 @@ import { storageService } from '../../services/storage/storage.service';
 import { aiService, SpendAdvisorResult } from '../../services/ai/ai.service';
 import { Category } from '../../types';
 import { formatCurrency } from '../../utils/formatters';
+import { useScrollLock } from '../../hooks/useScrollLock';
 
 interface BeforeYouSpendModalProps {
   isOpen: boolean;
@@ -25,6 +26,8 @@ export const BeforeYouSpendModal: React.FC<BeforeYouSpendModalProps> = ({
   onClose,
   currencySymbol,
 }) => {
+  useScrollLock(isOpen);
+
   const [description, setDescription] = useState('');
   const [amount, setAmount] = useState('');
   const [categoryId, setCategoryId] = useState('shopping');
@@ -74,26 +77,36 @@ export const BeforeYouSpendModal: React.FC<BeforeYouSpendModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4 overflow-y-auto">
-      <div className="relative w-full max-w-lg rounded-2xl border border-[#262626] bg-[#141414] p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-150 text-white">
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="relative w-full max-w-lg my-auto rounded-2xl border border-[#262626] bg-[#141414] shadow-2xl animate-in fade-in zoom-in-95 duration-150 text-white max-h-[calc(100dvh-1.5rem)] sm:max-h-[90vh] flex flex-col overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between pb-4 border-b border-[#262626]">
+        <div className="flex items-center justify-between p-4 sm:p-5 border-b border-[#262626] shrink-0">
           <div className="flex items-center gap-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20">
               <Sparkles size={16} />
             </div>
             <div>
-              <h3 className="text-base font-bold text-white">Before You Spend</h3>
-              <p className="text-xs text-gray-400">AI Context-Aware Purchase Simulator</p>
+              <h3 className="text-sm sm:text-base font-bold text-white">Before You Spend</h3>
+              <p className="text-[11px] sm:text-xs text-gray-400">AI Context-Aware Purchase Simulator</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="rounded-lg p-1.5 text-gray-400 hover:bg-[#262626] hover:text-white"
+            className="rounded-lg p-1.5 text-gray-400 hover:bg-[#262626] hover:text-white transition cursor-pointer"
+            aria-label="Close"
           >
             <X size={18} />
           </button>
         </div>
+
+        <div className="overflow-y-auto overscroll-contain p-4 sm:p-5">
 
         {!result ? (
           <form onSubmit={handleEvaluate} className="mt-4 space-y-4">
@@ -265,6 +278,7 @@ export const BeforeYouSpendModal: React.FC<BeforeYouSpendModalProps> = ({
             </div>
           </div>
         )}
+        </div>
       </div>
     </div>
   );

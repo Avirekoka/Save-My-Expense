@@ -19,6 +19,7 @@ import { storageService } from '../../services/storage/storage.service';
 import { TransactionParser, ParsedRawRow } from '../../services/ai/transaction-parser';
 import { ExpenseCategorizer } from '../../services/ai/expense-categorizer';
 import { formatCurrency, formatDate } from '../../utils/formatters';
+import { useScrollLock } from '../../hooks/useScrollLock';
 
 interface ImportCSVModalProps {
   isOpen: boolean;
@@ -33,6 +34,8 @@ export const ImportCSVModal: React.FC<ImportCSVModalProps> = ({
   onSuccess,
   currencySymbol,
 }) => {
+  useScrollLock(isOpen);
+
   const [activeTab, setActiveTab] = useState<'upload' | 'paste'>('upload');
   const [dragActive, setDragActive] = useState(false);
   const [pastedText, setPastedText] = useState('');
@@ -454,8 +457,8 @@ export const ImportCSVModal: React.FC<ImportCSVModalProps> = ({
               </div>
 
               {/* Selection quick actions */}
-              <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
-                <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-3 text-xs bg-[#0f0f0f] border border-[#262626] rounded-xl p-3">
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     onClick={() => setPreviewRows(previewRows.map((r) => ({ ...r, selected: true })))}
                     className="text-blue-400 hover:underline font-semibold"
@@ -484,9 +487,38 @@ export const ImportCSVModal: React.FC<ImportCSVModalProps> = ({
                   )}
                 </div>
 
-                <div className="text-gray-400 text-xs">
-                  Selected <strong className="text-white">{selectedCount}</strong> of{' '}
-                  <strong className="text-white">{previewRows.length}</strong> transactions
+                <div className="flex items-center gap-2">
+                  <span className="text-gray-400 text-[11px]">Price Unit:</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPreviewRows(
+                        previewRows.map((r) => ({
+                          ...r,
+                          amount: Math.round((r.amount / 100) * 100) / 100,
+                        }))
+                      );
+                    }}
+                    title="If values in your CSV are in paise (e.g. 50000), divide by 100 to convert to Rupees (500.00)"
+                    className="rounded-md border border-[#333] bg-[#181818] px-2.5 py-1 text-[11px] font-medium text-blue-400 hover:border-blue-500 hover:bg-blue-500/10 transition flex items-center gap-1"
+                  >
+                    <span>Convert Paise → ₹ (÷100)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPreviewRows(
+                        previewRows.map((r) => ({
+                          ...r,
+                          amount: Math.round(r.amount * 100 * 100) / 100,
+                        }))
+                      );
+                    }}
+                    title="Multiply by 100"
+                    className="rounded-md border border-[#333] bg-[#181818] px-2 py-1 text-[11px] font-medium text-gray-400 hover:border-gray-500 hover:text-white transition"
+                  >
+                    <span>×100</span>
+                  </button>
                 </div>
               </div>
 

@@ -51,20 +51,25 @@ export class InsightGenerator {
       date: dateStr,
     });
 
-    // 4. Money Leaks & Micro-Expenses
-    const leaks = SpendingAnalyzer.detectMoneyLeaks(currentMonthTxs);
-    if (leaks.length > 0) {
-      const totalLeaks = leaks.reduce((s, l) => s + l.monthlyAmount, 0);
+    // 4. Savings & Budget Optimization Opportunity
+    const discretionaryTxs = currentMonthTxs.filter(
+      (t) => t.type === 'expense' && ['food', 'shopping', 'entertainment'].includes(t.categoryId)
+    );
+    const discretionarySum = discretionaryTxs.reduce((s, t) => s + t.amount, 0);
+    if (discretionarySum > 5000) {
+      const potentialGain = Math.round(discretionarySum * 0.15);
       insights.push({
-        id: 'ins_money_leaks',
-        type: 'money_leak',
-        title: `Potential Money Leaks: ₹${totalLeaks.toLocaleString('en-IN')}/month`,
-        description: `Identified ${leaks.length} recurring micro-expenses (including delivery fees and small convenience apps) totaling ₹${(
-          totalLeaks * 12
-        ).toLocaleString('en-IN')} annualized.`,
-        impactAmount: totalLeaks,
-        actionRecommendation: 'Consolidate small grocery/food delivery orders to save on delivery fees and packaging surges.',
-        confidenceScore: 88,
+        id: 'ins_savings_boost',
+        type: 'smart_recommendation',
+        title: `Savings Opportunity: +₹${potentialGain.toLocaleString('en-IN')}/month`,
+        description: `By trimming 15% from lifestyle and discretionary expenses (currently ₹${discretionarySum.toLocaleString(
+          'en-IN'
+        )}), you can redirect an extra ₹${(potentialGain * 12).toLocaleString(
+          'en-IN'
+        )} annually towards your financial goals.`,
+        impactAmount: potentialGain,
+        actionRecommendation: 'Set category budget caps in Budgets & Planner or simulate goal acceleration in Goals.',
+        confidenceScore: 90,
         date: dateStr,
       });
     }

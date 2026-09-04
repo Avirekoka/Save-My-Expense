@@ -123,7 +123,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   };
 
   return (
-    <div className="space-y-6 pb-12">
+    <div className="space-y-5 sm:space-y-6 pb-6 sm:pb-8">
       {/* Toast Notification */}
       {reportSuccess && (
         <div className="flex items-center gap-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 p-3 text-xs text-emerald-400 animate-in fade-in">
@@ -133,7 +133,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
       )}
 
       {/* Header */}
-      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
+      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 sm:gap-4">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
             Analytics & Cash Flow Intelligence
@@ -162,7 +162,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
               id="download-monthly-report-btn"
               onClick={() => handleDownloadReport(selectedReportMonth)}
               disabled={isGenerating}
-              className="flex items-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 px-4 py-2 text-xs font-bold text-white shadow-xs transition"
+              className="flex items-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 px-4 py-2 text-xs font-bold text-white shadow-xs transition cursor-pointer"
               title={`Download comprehensive PDF financial report for ${getMonthName(selectedReportMonth)}`}
             >
               {isGenerating ? (
@@ -178,7 +178,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
           <div className="flex rounded-xl border border-[#262626] bg-[#0f0f0f] p-1 text-xs">
             <button
               onClick={() => setActiveTab('mom')}
-              className={`rounded-lg px-3 py-1.5 font-semibold transition ${
+              className={`rounded-lg px-3 py-1.5 font-semibold transition cursor-pointer ${
                 activeTab === 'mom'
                   ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30'
                   : 'text-gray-400 hover:text-white'
@@ -188,7 +188,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             </button>
             <button
               onClick={() => setActiveTab('cashflow')}
-              className={`rounded-lg px-3 py-1.5 font-semibold transition ${
+              className={`rounded-lg px-3 py-1.5 font-semibold transition cursor-pointer ${
                 activeTab === 'cashflow'
                   ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30'
                   : 'text-gray-400 hover:text-white'
@@ -198,7 +198,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             </button>
             <button
               onClick={() => setActiveTab('merchants')}
-              className={`rounded-lg px-3 py-1.5 font-semibold transition ${
+              className={`rounded-lg px-3 py-1.5 font-semibold transition cursor-pointer ${
                 activeTab === 'merchants'
                   ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30'
                   : 'text-gray-400 hover:text-white'
@@ -208,7 +208,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             </button>
             <button
               onClick={() => setActiveTab('methods')}
-              className={`rounded-lg px-3 py-1.5 font-semibold transition ${
+              className={`rounded-lg px-3 py-1.5 font-semibold transition cursor-pointer ${
                 activeTab === 'methods'
                   ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30'
                   : 'text-gray-400 hover:text-white'
@@ -221,7 +221,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
       </div>
 
       {/* 3-Month Trend Chart */}
-      <div className="rounded-xl border border-[#262626] bg-[#141414] p-6 shadow-xs">
+      <div className="rounded-xl border border-[#262626] bg-[#141414] p-4 sm:p-5 lg:p-6 shadow-xs">
         <div className="flex items-center justify-between border-b border-[#262626] pb-4 mb-4">
           <div>
             <h2 className="text-base font-bold text-white">Income vs. Outflow Growth</h2>
@@ -264,8 +264,8 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
       {/* Tab 1: Month-over-Month Variance Grid */}
       {activeTab === 'mom' && (
-        <div className="space-y-6">
-          <div className="rounded-xl border border-[#262626] bg-[#141414] p-6 shadow-xs">
+        <div className="space-y-5 sm:space-y-6">
+          <div className="rounded-xl border border-[#262626] bg-[#141414] p-4 sm:p-5 lg:p-6 shadow-xs">
             <div className="flex items-center justify-between border-b border-[#262626] pb-4 mb-4">
               <div>
                 <h2 className="text-base font-bold text-white">
@@ -325,7 +325,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
           </div>
 
           {/* 31-Day Spending Heatmap */}
-          <div className="rounded-xl border border-[#262626] bg-[#141414] p-6 shadow-xs">
+          <div className="rounded-xl border border-[#262626] bg-[#141414] p-4 sm:p-5 lg:p-6 shadow-xs">
             <div className="flex items-center justify-between border-b border-[#262626] pb-4 mb-4">
               <div>
                 <h2 className="text-base font-bold text-white">August Daily Spending Intensity</h2>
@@ -372,7 +372,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
       {/* Tab 2: True Cash Flow */}
       {activeTab === 'cashflow' && (
-        <div className="rounded-xl border border-[#262626] bg-[#141414] p-6 shadow-xs space-y-6">
+        <div className="rounded-xl border border-[#262626] bg-[#141414] p-4 sm:p-5 lg:p-6 shadow-xs space-y-5 sm:space-y-6">
           <div>
             <h2 className="text-base font-bold text-white">
               True Cash Flow Separation Engine
@@ -418,7 +418,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
       {/* Tab 3: Top Merchants */}
       {activeTab === 'merchants' && (
-        <div className="rounded-xl border border-[#262626] bg-[#141414] p-6 shadow-xs">
+        <div className="rounded-xl border border-[#262626] bg-[#141414] p-4 sm:p-5 lg:p-6 shadow-xs">
           <div className="flex items-center justify-between border-b border-[#262626] pb-4 mb-4">
             <div>
               <h2 className="text-base font-bold text-white">Merchant Concentration Matrix</h2>
@@ -458,7 +458,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
       {/* Tab 4: Payment Methods */}
       {activeTab === 'methods' && (
-        <div className="rounded-xl border border-[#262626] bg-[#141414] p-6 shadow-xs">
+        <div className="rounded-xl border border-[#262626] bg-[#141414] p-4 sm:p-5 lg:p-6 shadow-xs">
           <div className="flex items-center justify-between border-b border-[#262626] pb-4 mb-4">
             <div>
               <h2 className="text-base font-bold text-white">Payment Rails & Instrumentation</h2>

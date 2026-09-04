@@ -236,7 +236,7 @@ export const StatementsView: React.FC<StatementsViewProps> = ({
   };
 
   return (
-    <div className="space-y-6 pb-12">
+    <div className="space-y-5 sm:space-y-6 pb-6 sm:pb-8">
       {/* In-app Notification */}
       {notification && (
         <div
@@ -267,7 +267,7 @@ export const StatementsView: React.FC<StatementsViewProps> = ({
 
       {!previewRows.length ? (
         /* Upload / Paste Area */
-        <div className="space-y-6">
+        <div className="space-y-5 sm:space-y-6">
           {/* Tab Selector */}
           <div className="flex border-b border-[#262626]">
             <button
@@ -444,7 +444,43 @@ export const StatementsView: React.FC<StatementsViewProps> = ({
               </p>
             </div>
 
-            <div className="flex items-center gap-2.5">
+            <div className="flex flex-wrap items-center gap-2.5">
+              {/* Price unit helper */}
+              <div className="flex items-center gap-1.5 bg-[#0f0f0f] border border-[#262626] rounded-lg px-2.5 py-1.5 text-[11px]">
+                <span className="text-gray-400">Unit:</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPreviewRows(
+                      previewRows.map((r) => ({
+                        ...r,
+                        amount: Math.round((r.amount / 100) * 100) / 100,
+                      }))
+                    );
+                  }}
+                  title="If statement amounts were in paise, divide by 100 to convert to Rupees"
+                  className="text-blue-400 font-semibold hover:underline"
+                >
+                  Paise → ₹ (÷100)
+                </button>
+                <span className="text-gray-600">|</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPreviewRows(
+                      previewRows.map((r) => ({
+                        ...r,
+                        amount: Math.round(r.amount * 100 * 100) / 100,
+                      }))
+                    );
+                  }}
+                  title="Multiply amounts by 100"
+                  className="text-gray-400 font-semibold hover:text-white"
+                >
+                  ×100
+                </button>
+              </div>
+
               <button
                 onClick={() => {
                   setPreviewRows([]);

@@ -111,6 +111,8 @@ export type InsightType =
   | 'weekend_spending'
   | 'salary_day_behavior'
   | 'money_leak'
+  | 'smart_recommendation'
+  | 'budget_optimization'
   | 'spending_personality'
   | 'monthly_story';
 
@@ -145,10 +147,23 @@ export interface FinancialHealthScore {
   areasToImprove: string[];
 }
 
+export type NudgeTone = 'gentle' | 'mindful' | 'motivational';
+
+export interface DailySpendingAlertSetting {
+  enabled: boolean;
+  threshold: number; // Daily spending threshold amount (e.g. 2000)
+  targetGoalId?: string; // Optional ID of goal to link the gentle nudge to
+  nudgeTone?: NudgeTone; // Tone of the nudge message
+  lastAlertDate?: string; // Last date (YYYY-MM-DD) an alert was generated
+}
+
 export interface UserProfile {
   id: string;
   name: string;
   email: string;
+  photoURL?: string;
+  phone?: string;
+  occupation?: string;
   currency: string;
   currencySymbol: string;
   monthlyIncome: number;
@@ -159,12 +174,24 @@ export interface UserProfile {
     alertThreshold: number;
     anomalyDetection: boolean;
   };
+  dailySpendingAlert?: DailySpendingAlertSetting;
 }
+
+export type LoanType =
+  | 'Personal Loan'
+  | 'Home Loan'
+  | 'Auto Loan'
+  | 'Credit Card EMI'
+  | 'Education Loan'
+  | 'Consumer Durable'
+  | 'Business Loan'
+  | 'Other';
 
 export interface EMILoan {
   id: string;
   name: string;
   lender: string;
+  type?: LoanType | string;
   totalAmount: number;
   remainingAmount: number;
   emiAmount: number;
@@ -173,16 +200,29 @@ export interface EMILoan {
   paidMonths: number;
   nextDueDate: string;
   startDate: string;
+  notes?: string;
+  accountNumber?: string;
+  color?: string;
+  icon?: string;
+  prepaymentsMade?: number;
 }
 
 export interface NotificationItem {
   id: string;
   title: string;
   message: string;
-  type: 'budget_alert' | 'anomaly' | 'subscription_due' | 'monthly_report' | 'spending_spike';
+  type:
+    | 'budget_alert'
+    | 'anomaly'
+    | 'subscription_due'
+    | 'monthly_report'
+    | 'spending_spike'
+    | 'daily_limit_exceeded';
   date: string;
   read: boolean;
   actionUrl?: string;
+  goalName?: string;
+  overAmount?: number;
 }
 
 export interface AskMoneyResponse {
@@ -192,4 +232,67 @@ export interface AskMoneyResponse {
   relevantTransactions: Transaction[];
   insights?: string[];
   suggestedFollowUps?: string[];
+}
+
+export type RecurringFrequency = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
+export type RecurringCategoryType =
+  | 'rent'
+  | 'subscription'
+  | 'emi'
+  | 'utility'
+  | 'salary'
+  | 'investment'
+  | 'insurance'
+  | 'custom';
+
+export interface RecurringSchedule {
+  id: string;
+  name: string;
+  amount: number;
+  type: TransactionType;
+  categoryId: string;
+  recurringType: RecurringCategoryType;
+  frequency: RecurringFrequency;
+  dayOfMonth: number; // 1-31 (or day of week 0-6 for weekly)
+  startDate: string; // YYYY-MM-DD
+  endDate?: string; // YYYY-MM-DD (optional)
+  paymentMethod: PaymentMethod;
+  autoInject: boolean;
+  lastInjectedDate?: string;
+  status: 'active' | 'paused' | 'completed';
+  tags: string[];
+  notes?: string;
+  sourceRefId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RecurringProjectedOccurrence {
+  scheduleId: string;
+  name: string;
+  amount: number;
+  type: TransactionType;
+  categoryId: string;
+  recurringType: RecurringCategoryType;
+  frequency: RecurringFrequency;
+  date: string; // YYYY-MM-DD
+  paymentMethod: PaymentMethod;
+  isMaterialized: boolean;
+  materializedTransactionId?: string;
+  status: 'paid' | 'due_today' | 'upcoming' | 'overdue' | 'paused';
+  daysUntilDue: number;
+  autoInject: boolean;
+}
+
+export interface RecurringMonthSummary {
+  monthStr: string;
+  totalRecurringExpenses: number;
+  totalInjectedOrPaid: number;
+  totalPendingUpcoming: number;
+  totalRecurringIncome: number;
+  items: RecurringProjectedOccurrence[];
+  activeCount: number;
+  settledCount: number;
+  pendingCount: number;
+  breakdownByType: Record<RecurringCategoryType, number>;
 }

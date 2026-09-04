@@ -66,7 +66,8 @@ Tasks:
    - "cash_withdrawal": ATM withdrawals (not spending!)
 4. Select one of these category IDs: food, groceries, shopping, travel, transport, fuel, bills, utilities, rent, healthcare, education, entertainment, subscriptions, insurance, investments, loan_emi, salary, transfers, cash_withdrawal, other.
 5. Provide a realistic confidence score (0-100) for categorization.
-6. Provide calculated totalDebit and totalCredit.`;
+6. Provide calculated totalDebit and totalCredit.
+7. CRITICAL AMOUNT UNIT RULE: Amounts MUST ALWAYS be in standard Rupee units (INR) e.g. 1890.50 or 250.00. NEVER multiply amounts by 100 or convert to paise. If amounts in statement have decimals (like 1890.50), preserve the exact decimal value. If the statement explicitly states amounts in paise (e.g., 189050 paise), convert them to rupees (1890.50).`;
 
     const response = await ai.models.generateContent({
       model: 'gemini-3.7-flash',
@@ -84,7 +85,7 @@ Tasks:
                   date: { type: Type.STRING, description: 'YYYY-MM-DD format' },
                   description: { type: Type.STRING, description: 'Original or summarized description' },
                   merchant: { type: Type.STRING, description: 'Clean normalized merchant name' },
-                  amount: { type: Type.NUMBER, description: 'Numeric amount' },
+                  amount: { type: Type.NUMBER, description: 'Numeric amount in standard Rupees (e.g. 1890.50, NOT in paise)' },
                   type: {
                     type: Type.STRING,
                     enum: ['expense', 'income', 'transfer', 'refund', 'investment', 'loan_emi', 'cash_withdrawal'],
@@ -421,6 +422,127 @@ Recommend optimal monthly budget allocations across categories. Follow the 50/30
   } catch (error: any) {
     console.error('Error in budget recommendation:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// 6. Camera Receipt AI Scanner & Information Extractor
+app.post('/api/ai/scan-receipt', async (req, res) => {
+  try {
+    const { imageBase64, mimeType = 'image/jpeg', categories } = req.body;
+    if (!imageBase64) {
+      return res.status(400).json({ error: 'Receipt image data (imageBase64) is required.' });
+    }
+
+    const ai = getAI();
+    if (!ai) {
+      return res.status(500).json({ error: 'GEMINI_API_KEY is not configured on server' });
+    }
+
+    // Clean base64 string if data URL scheme prefix exists
+    let cleanBase64 = imageBase64;
+    let resolvedMimeType = mimeType;
+    if (imageBase64.includes(';base64,')) {
+      const parts = imageBase64.split(';base64,');
+      resolvedMimeType = parts[0].replace('data:', '');
+      cleanBase64 = parts[1];
+    }
+
+    const promptText = `You are a high-precision OCR and financial receipt analysis engine.
+Analyze this physical or digital receipt/invoice image carefully and extract all transaction details.
+
+Available Category IDs in system:
+${JSON.stringify(
+  categories || [
+    { id: 'food', name: 'Food & Dining' },
+    { id: 'groceries', name: 'Groceries' },
+    { id: 'shopping', name: 'Shopping & Retail' },
+    { id: 'travel', name: 'Travel & Flights' },
+    { id: 'transport', name: 'Cab & Transit' },
+    { id: 'fuel', name: 'Fuel / Gas' },
+    { id: 'bills', name: 'Bills & Utilities' },
+    { id: 'healthcare', name: 'Health & Pharmacy' },
+    { id: 'entertainment', name: 'Entertainment & Movies' },
+    { id: 'subscriptions', name: 'Digital Subscriptions' },
+    { id: 'other', name: 'Other' },
+  ]
+)}
+
+Instructions:
+1. Extract the primary Merchant/Store name clearly (clean normalized title, e.g. "Starbucks Coffee", "Decathlon Sports", "Shell Petrol", "Apollo Pharmacy", "Zomato", "Costco").
+2. Extract the Final Total Amount as a numeric value (e.g. 542.50). IMPORTANT: Do not convert to paise; keep as standard currency value (Rupees/Dollars).
+3. Extract the Transaction Date in YYYY-MM-DD format. If only DD/MM or day is found, use the current year (2026).
+4. Categorize accurately using the most appropriate category ID from the list.
+5. Identify Payment Method if indicated on receipt footer (e.g. "UPI", "Credit Card", "Debit Card", "Cash", "Net Banking", "Wallet", "Other").
+6. Extract Line Items (item name, quantity, price) if legible.
+7. Summarize the items into a concise note (e.g., "1x Latte, 2x Croissants").
+8. Generate 2-4 helpful tags (e.g., ["receipt", "dining", "breakfast"]).
+9. Estimate confidenceScore between 0 and 100 based on image clarity and text legibility.`;
+
+    const imagePart = {
+      inlineData: {
+        mimeType: resolvedMimeType || 'image/jpeg',
+        data: cleanBase64,
+      },
+    };
+
+    const textPart = {
+      text: promptText,
+    };
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.7-flash',
+      contents: { parts: [imagePart, textPart] },
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            merchant: { type: Type.STRING, description: 'Store or vendor name' },
+            amount: { type: Type.NUMBER, description: 'Final total amount paid' },
+            date: { type: Type.STRING, description: 'Date in YYYY-MM-DD format' },
+            type: {
+              type: Type.STRING,
+              enum: ['expense', 'income', 'refund', 'transfer', 'investment', 'loan_emi'],
+              description: 'Transaction classification',
+            },
+            categoryId: { type: Type.STRING, description: 'Selected category identifier' },
+            categoryName: { type: Type.STRING, description: 'Readable category name' },
+            paymentMethod: {
+              type: Type.STRING,
+              enum: ['UPI', 'Credit Card', 'Debit Card', 'Net Banking', 'Cash', 'Wallet', 'Other'],
+            },
+            taxAmount: { type: Type.NUMBER, description: 'Taxes or GST amount if identified' },
+            notes: { type: Type.STRING, description: 'Itemized summary or invoice reference' },
+            tags: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: 'List of relevant keywords',
+            },
+            items: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  name: { type: Type.STRING },
+                  quantity: { type: Type.NUMBER },
+                  price: { type: Type.NUMBER },
+                },
+                required: ['name'],
+              },
+            },
+            confidenceScore: { type: Type.INTEGER, description: 'Confidence from 0 to 100' },
+            detectedCurrency: { type: Type.STRING, description: 'Currency symbol or ISO code' },
+          },
+          required: ['merchant', 'amount', 'date', 'categoryId', 'type', 'confidenceScore'],
+        },
+      },
+    });
+
+    const parsedData = JSON.parse(response.text?.trim() || '{}');
+    res.json(parsedData);
+  } catch (error: any) {
+    console.error('Error in /api/ai/scan-receipt:', error);
+    res.status(500).json({ error: error.message || 'Receipt scanning failed' });
   }
 });
 

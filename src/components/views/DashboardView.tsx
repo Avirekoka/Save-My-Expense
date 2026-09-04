@@ -6,14 +6,17 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   Wallet,
-  ShieldCheck,
-  AlertTriangle,
   Receipt,
-  Calendar,
-  Layers,
-  ChevronRight,
   Plus,
-  RefreshCw,
+  Camera,
+  Repeat,
+  ChevronRight,
+  ShieldCheck,
+  Zap,
+  Calendar,
+  CheckCircle2,
+  SlidersHorizontal,
+  Target,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -21,19 +24,16 @@ import {
   Pie,
   Cell,
   Tooltip,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
 } from 'recharts';
 import {
   Transaction,
   Category,
-  UserProfile,
   FinancialHealthScore,
   AIInsight,
 } from '../../types';
 import { storageService, NOTIFY_EVENT } from '../../services/storage/storage.service';
+import { recurringService } from '../../services/recurring/recurring.service';
+import { RecurringScheduleModal } from '../modals/RecurringScheduleModal';
 import { SpendingAnalyzer } from '../../services/ai/spending-analyzer';
 import { InsightGenerator } from '../../services/ai/insight-generator';
 import { formatCurrency, formatDate, formatShortDate, getMonthName } from '../../utils/formatters';
@@ -46,6 +46,7 @@ interface DashboardViewProps {
   onOpenAddModal: () => void;
   onOpenBeforeSpend: () => void;
   onOpenAskMoney: () => void;
+  onOpenScanReceipt?: () => void;
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
@@ -55,45 +56,45 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenAddModal,
   onOpenBeforeSpend,
   onOpenAskMoney,
+  onOpenScanReceipt,
 }) => {
-  const [refreshKey, setRefreshKey] = useState(0);
   const [categories, setCategories] = useState<Category[]>([]);
   const [healthScore, setHealthScore] = useState<FinancialHealthScore | null>(null);
   const [insights, setInsights] = useState<AIInsight[]>([]);
+  const [isRecurringModalOpen, setIsRecurringModalOpen] = useState(false);
+  const [autoInjectBanner, setAutoInjectBanner] = useState<{ count: number; amount: number } | null>(null);
+
+  const activeMonthStr = currentMonth === 'all' ? '2026-08' : currentMonth;
+
+  const loadData = () => {
+    setCategories(storageService.getCategories());
+    setHealthScore(storageService.calculateFinancialHealthScore());
+
+    const currentTxs = storageService.getTransactions().filter((t) => t.date.startsWith('2026-08'));
+    const prevTxs = storageService.getTransactions().filter((t) => t.date.startsWith('2026-07'));
+    const cats = storageService.getCategories();
+    const generated = InsightGenerator.generateDynamicInsights(currentTxs, prevTxs, cats);
+    setInsights(generated);
+  };
 
   useEffect(() => {
-    const load = () => {
-      setCategories(storageService.getCategories());
-      setHealthScore(storageService.calculateFinancialHealthScore());
-
-      const currentTxs = storageService.getTransactions().filter((t) => t.date.startsWith('2026-08'));
-      const prevTxs = storageService.getTransactions().filter((t) => t.date.startsWith('2026-07'));
-      const cats = storageService.getCategories();
-      const generated = InsightGenerator.generateDynamicInsights(currentTxs, prevTxs, cats);
-      setInsights(generated);
-    };
-
-    load();
-
-    const handleUpdate = () => {
-      setRefreshKey((k) => k + 1);
-      load();
-    };
-
+    loadData();
+    const handleUpdate = () => loadData();
     window.addEventListener(NOTIFY_EVENT, handleUpdate);
     return () => window.removeEventListener(NOTIFY_EVENT, handleUpdate);
   }, [currentMonth]);
 
   // Compute month summary
-  const summary = storageService.calculateMonthSummary(
-    currentMonth === 'all' ? '2026-08' : currentMonth
-  );
+  const summary = storageService.calculateMonthSummary(activeMonthStr);
   const prevSummary = storageService.calculateMonthSummary('2026-07');
   const momComparison = SpendingAnalyzer.compareMonths(
     summary.transactions,
     prevSummary.transactions,
     categories
   );
+
+  // Compute recurring transactions summary
+  const recurringSummary = recurringService.getRecurringMonthSummary(activeMonthStr, '2026-08-28');
 
   // Pie chart data
   const pieData = Object.entries(summary.categorySpending)
@@ -108,223 +109,441 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     })
     .sort((a, b) => b.value - a.value);
 
-  // Weekly spending bars for current month
-  const weeklyData = [
-    { name: 'Aug 1-7', amount: 38419 },
-    { name: 'Aug 8-14', amount: 8218 },
-    { name: 'Aug 15-21', amount: 23800 },
-    { name: 'Aug 22-28', amount: 2013 },
-  ];
+  const recentTransactions = summary.transactions.slice(0, 5);
+  const upcomingBills = recurringSummary.items
+    .filter((item) => item.status !== 'paid' && item.status !== 'paused')
+    .slice(0, 3);
 
-  const recentTransactions = summary.transactions.slice(0, 6);
+  const handleInjectSingle = (scheduleId: string, dateStr: string) => {
+    recurringService.injectSingleOccurrence(scheduleId, dateStr);
+    loadData();
+  };
+
+  const handleRunAutoInject = () => {
+    const res = recurringService.autoInjectDueTransactions('2026-08-28');
+    if (res.injectedCount > 0) {
+      setAutoInjectBanner({ count: res.injectedCount, amount: res.totalInjectedAmount });
+      setTimeout(() => setAutoInjectBanner(null), 5000);
+    } else {
+      setAutoInjectBanner({ count: 0, amount: 0 });
+      setTimeout(() => setAutoInjectBanner(null), 3000);
+    }
+    loadData();
+  };
+
+  const topInsight = insights[0];
+
+  // Daily Spending Alert & Goal Guard data
+  const profile = storageService.getUserProfile();
+  const dailyAlert = profile.dailySpendingAlert;
+  const todaySpend = storageService.getTodayOrLatestDailySpending();
+  const goals = storageService.getGoals();
+  const linkedGoal = goals.find((g) => g.id === dailyAlert?.targetGoalId) || goals[0];
+  const goalProgress =
+    linkedGoal && linkedGoal.targetAmount > 0
+      ? Math.round((linkedGoal.currentAmount / linkedGoal.targetAmount) * 100)
+      : 0;
+  const dailyThreshold = dailyAlert?.threshold || 2000;
+  const isDailyOver = todaySpend.total > dailyThreshold;
+  const dailyPct = Math.round((todaySpend.total / dailyThreshold) * 100);
 
   return (
-    <div className="space-y-6 pb-12">
-      {/* Top Banner: Financial Intelligence Pulse */}
-      <div className="relative overflow-hidden rounded-2xl border border-[#262626] bg-[#111111] p-6 text-white shadow-lg">
-        <div className="absolute -right-12 -top-12 h-64 w-64 rounded-full bg-blue-600/10 blur-3xl" />
-        <div className="absolute right-24 -bottom-12 h-48 w-48 rounded-full bg-emerald-500/10 blur-3xl" />
-
-        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div>
-            <div className="inline-flex items-center gap-1.5 rounded-full bg-blue-600/10 px-3 py-1 text-xs font-semibold text-blue-400 border border-blue-500/20">
-              <Sparkles size={13} className="text-blue-400" />
-              <span>AI Intelligence Overview • {getMonthName(currentMonth === 'all' ? '2026-08' : currentMonth)}</span>
-            </div>
-            <h1 className="mt-2.5 text-2xl sm:text-3xl font-bold tracking-tight text-white">
-              Financial Health is{' '}
-              <span className="text-emerald-400">{healthScore?.rating || 'Good'}</span> (
-              {healthScore?.score || 78}/100)
+    <div className="space-y-5 sm:space-y-6 pb-6 sm:pb-8">
+      {/* 1. Header with Quick Actions */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
+        <div>
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-white">
+              {getMonthName(activeMonthStr)} Overview
             </h1>
-            <p className="mt-1 max-w-2xl text-xs sm:text-sm text-gray-400 leading-relaxed">
-              {healthScore?.summary ||
-                'Your cash flow remains strong with a healthy savings margin. Review recent technology purchases and 1 inactive subscription.'}
-            </p>
+            {healthScore && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-xs font-semibold text-emerald-400 border border-emerald-500/20">
+                Score: {healthScore.score}/100
+              </span>
+            )}
           </div>
+          <p className="text-xs text-gray-400 mt-1">
+            Track your income, daily expenses, and scheduled bills with ease.
+          </p>
+        </div>
 
-          <div className="flex items-center gap-2.5">
+        {/* Action Buttons */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {onOpenScanReceipt && (
             <button
-              onClick={onOpenAskMoney}
-              className="flex items-center gap-2 rounded-xl bg-[#1a1a1a] px-4 py-2.5 text-xs font-bold text-white transition hover:bg-[#252525] border border-[#333] shadow-xs"
+              onClick={onOpenScanReceipt}
+              className="flex items-center gap-1.5 rounded-lg border border-[#2e2e2e] bg-[#141414] px-3 py-2 text-xs font-semibold text-gray-200 hover:bg-[#1f1f1f] hover:text-white transition cursor-pointer"
             >
-              <Sparkles size={15} className="text-blue-400" />
-              <span>Ask AI Advisor</span>
+              <Camera size={14} className="text-blue-400" />
+              <span>Scan Receipt</span>
             </button>
-            <button
-              onClick={() => onNavigate('statements')}
-              className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-blue-500 shadow-md shadow-blue-900/40"
-            >
-              <Receipt size={15} />
-              <span>Upload Statement</span>
-            </button>
-          </div>
+          )}
+
+          <button
+            onClick={onOpenAskMoney}
+            className="flex items-center gap-1.5 rounded-lg border border-[#2e2e2e] bg-[#141414] px-3 py-2 text-xs font-semibold text-gray-200 hover:bg-[#1f1f1f] hover:text-white transition cursor-pointer"
+          >
+            <Sparkles size={14} className="text-purple-400" />
+            <span>Ask AI</span>
+          </button>
+
+          <button
+            onClick={onOpenAddModal}
+            className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 py-2 text-xs font-bold text-white hover:bg-blue-500 transition shadow-xs cursor-pointer"
+          >
+            <Plus size={14} />
+            <span>Add Expense</span>
+          </button>
         </div>
       </div>
 
-      {/* 4 Core Financial Metrics */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {/* Income Card */}
-        <div className="rounded-xl border border-[#262626] bg-[#141414] p-5 shadow-xs">
-          <div className="flex items-center justify-between text-xs font-semibold text-gray-500">
-            <span>Total Monthly Inflow</span>
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-400">
-              <ArrowDownRight size={17} />
+      {/* Auto-injection status banner */}
+      {autoInjectBanner && (
+        <div
+          className={`flex items-center justify-between rounded-lg border p-3 text-xs font-medium transition ${
+            autoInjectBanner.count > 0
+              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+              : 'bg-blue-500/10 border-blue-500/30 text-blue-300'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <CheckCircle2 size={15} className="text-emerald-400 shrink-0" />
+            <span>
+              {autoInjectBanner.count > 0
+                ? `Auto-injected ${autoInjectBanner.count} recurring bills (${formatCurrency(
+                    autoInjectBanner.amount,
+                    currencySymbol
+                  )}) into your transactions.`
+                : 'All recurring bills for this month are recorded and up to date.'}
+            </span>
+          </div>
+          <button
+            onClick={() => setAutoInjectBanner(null)}
+            className="text-gray-400 hover:text-white text-xs"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* 2. Key Metric Cards (Clean, 4-grid) */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-5">
+        {/* Inflow / Income */}
+        <div className="rounded-xl border border-[#222] bg-[#121212] p-3.5 sm:p-4.5 lg:p-5">
+          <div className="flex items-center justify-between text-xs text-gray-400">
+            <span>Income</span>
+            <div className="flex h-6 w-6 items-center justify-center rounded-md bg-emerald-500/10 text-emerald-400">
+              <ArrowDownRight size={14} />
             </div>
           </div>
-          <div className="mt-2 font-mono text-2xl font-extrabold text-white">
+          <div className="mt-2 font-mono text-xl font-bold text-white">
             {formatCurrency(summary.totalIncome, currencySymbol)}
           </div>
-          <div className="mt-2 flex items-center gap-1.5 text-xs text-emerald-400 font-medium">
-            <span className="font-semibold">100% credited</span>
-            <span className="text-gray-500">• Salary + Rewards</span>
+          <div className="mt-1 text-[11px] text-emerald-400 font-medium">
+            100% received
           </div>
         </div>
 
-        {/* Expenses Card */}
-        <div className="rounded-xl border border-[#262626] bg-[#141414] p-5 shadow-xs">
-          <div className="flex items-center justify-between text-xs font-semibold text-gray-500">
-            <span>Total Outflow (Expenses)</span>
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-500/10 text-rose-400">
-              <ArrowUpRight size={17} />
+        {/* Outflow / Expenses */}
+        <div className="rounded-xl border border-[#222] bg-[#121212] p-3.5 sm:p-4.5 lg:p-5">
+          <div className="flex items-center justify-between text-xs text-gray-400">
+            <span>Expenses</span>
+            <div className="flex h-6 w-6 items-center justify-center rounded-md bg-rose-500/10 text-rose-400">
+              <ArrowUpRight size={14} />
             </div>
           </div>
-          <div className="mt-2 font-mono text-2xl font-extrabold text-white">
+          <div className="mt-2 font-mono text-xl font-bold text-white">
             {formatCurrency(summary.totalExpenses, currencySymbol)}
           </div>
-          <div className="mt-2 flex items-center gap-1.5 text-xs text-rose-400 font-medium">
-            <span>
-              {momComparison.totalChangePercentage >= 0 ? '+' : ''}
-              {momComparison.totalChangePercentage}% vs last month
-            </span>
-            <span className="text-gray-500">• High-ticket tech</span>
+          <div className="mt-1 text-[11px] text-gray-400">
+            <span className={momComparison.totalChangePercentage > 0 ? 'text-rose-400' : 'text-emerald-400'}>
+              {momComparison.totalChangePercentage > 0 ? '+' : ''}
+              {momComparison.totalChangePercentage}%
+            </span>{' '}
+            vs last month
           </div>
         </div>
 
-        {/* Net Savings Card */}
-        <div className="rounded-xl border border-[#262626] bg-[#141414] p-5 shadow-xs">
-          <div className="flex items-center justify-between text-xs font-semibold text-gray-500">
-            <span>Net Saved Amount</span>
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500/10 text-blue-400">
-              <Wallet size={17} />
+        {/* Net Savings */}
+        <div className="rounded-xl border border-[#222] bg-[#121212] p-3.5 sm:p-4.5 lg:p-5">
+          <div className="flex items-center justify-between text-xs text-gray-400">
+            <span>Saved</span>
+            <div className="flex h-6 w-6 items-center justify-center rounded-md bg-blue-500/10 text-blue-400">
+              <Wallet size={14} />
             </div>
           </div>
-          <div className="mt-2 font-mono text-2xl font-extrabold text-blue-400">
+          <div className="mt-2 font-mono text-xl font-bold text-blue-400">
             {formatCurrency(summary.saved, currencySymbol)}
           </div>
-          <div className="mt-2 flex items-center gap-1.5 text-xs text-gray-400">
-            <span className="font-semibold text-emerald-400">
-              {summary.savingsRate.toFixed(1)}% savings rate
-            </span>
-            <span className="text-gray-500">• Target: 40%</span>
+          <div className="mt-1 text-[11px] text-emerald-400 font-medium">
+            {summary.savingsRate.toFixed(0)}% savings rate
           </div>
         </div>
 
-        {/* Fixed Commitments & Subscriptions */}
-        <div className="rounded-xl border border-[#262626] bg-[#141414] p-5 shadow-xs">
-          <div className="flex items-center justify-between text-xs font-semibold text-gray-500">
-            <span>Fixed & Recurring Burn</span>
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/10 text-amber-400">
-              <ShieldCheck size={17} />
+        {/* Recurring / Fixed Bills */}
+        <div
+          onClick={() => setIsRecurringModalOpen(true)}
+          className="rounded-xl border border-[#222] bg-[#121212] p-3.5 sm:p-4.5 lg:p-5 hover:border-purple-500/40 transition cursor-pointer group"
+        >
+          <div className="flex items-center justify-between text-xs text-gray-400">
+            <span className="group-hover:text-purple-300 transition">Fixed Bills</span>
+            <div className="flex h-6 w-6 items-center justify-center rounded-md bg-purple-500/10 text-purple-400">
+              <Repeat size={14} />
             </div>
           </div>
-          <div className="mt-2 font-mono text-2xl font-extrabold text-white">
-            {formatCurrency(43265, currencySymbol)}
+          <div className="mt-2 font-mono text-xl font-bold text-white group-hover:text-purple-200 transition">
+            {formatCurrency(recurringSummary.totalRecurringExpenses, currencySymbol)}
           </div>
-          <div className="mt-2 flex items-center gap-1.5 text-xs text-gray-400">
-            <span className="text-gray-400">Rent (₹25k) + EMI (₹12.5k) + Subs</span>
+          <div className="mt-1 text-[11px] text-purple-400 font-medium">
+            {recurringSummary.pendingCount} bills pending →
           </div>
         </div>
       </div>
 
-      {/* Row 2: "Where Did My Money Go?" & "What Changed This Month?" */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-        {/* "Where Did My Money Go?" (7 Cols) */}
-        <div className="rounded-xl border border-[#262626] bg-[#141414] p-6 shadow-xs lg:col-span-7">
-          <div className="flex items-center justify-between border-b border-[#262626] pb-4">
-            <div>
-              <h2 className="text-sm font-semibold uppercase tracking-wider text-white">Where Did My Money Go?</h2>
-              <p className="text-xs text-gray-500">Category spending distribution for this month</p>
-            </div>
-            <button
-              onClick={() => onNavigate('analytics')}
-              className="text-xs font-bold text-blue-400 hover:text-blue-300 flex items-center gap-1 uppercase tracking-wider"
-            >
-              Deep Analytics <ChevronRight size={14} />
-            </button>
-          </div>
-
-          <div className="mt-6 grid grid-cols-1 md:grid-cols-12 gap-6 items-center">
-            {/* Donut Chart */}
-            <div className="h-52 md:col-span-5 relative flex items-center justify-center">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={pieData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={55}
-                    outerRadius={80}
-                    paddingAngle={3}
-                    dataKey="value"
+      {/* Daily Spending & Goal Guard Banner (when enabled) */}
+      {dailyAlert?.enabled && (
+        <div
+          id="daily-spending-goal-guard-banner"
+          className={`rounded-xl border p-4.5 transition relative overflow-hidden ${
+            isDailyOver
+              ? 'border-amber-500/30 bg-gradient-to-r from-amber-500/10 via-[#141414] to-[#141414]'
+              : 'border-[#222] bg-[#121212]'
+          }`}
+        >
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <div
+                className={`flex h-9 w-9 items-center justify-center rounded-xl shrink-0 ${
+                  isDailyOver
+                    ? 'bg-amber-500/15 border border-amber-500/30 text-amber-400'
+                    : 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400'
+                }`}
+              >
+                <Target size={18} />
+              </div>
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-bold text-white">
+                    {isDailyOver ? 'Daily Spending Limit Nudge' : "Today's Spending Ceiling"}
+                  </span>
+                  <span
+                    className={`rounded-md px-1.5 py-0.5 text-[9px] font-bold ${
+                      isDailyOver
+                        ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                        : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                    }`}
                   >
-                    {pieData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: '#141414',
-                      borderColor: '#262626',
-                      borderRadius: '10px',
-                      color: '#e5e5e5',
-                      fontSize: '12px',
-                    }}
-                    formatter={(value: any) => [
-                      formatCurrency(Number(value), currencySymbol),
-                      'Spent',
-                    ]}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-              <div className="absolute text-center pointer-events-none">
-                <span className="text-[10px] font-bold text-gray-500 uppercase">Total</span>
-                <div className="font-mono text-sm font-extrabold text-white">
-                  {formatCurrency(summary.totalExpenses, currencySymbol)}
+                    {isDailyOver ? 'Goal Nudge Active' : 'On Track'}
+                  </span>
                 </div>
+                <p className="text-xs text-gray-300 leading-relaxed max-w-2xl">
+                  {isDailyOver ? (
+                    <>
+                      You've spent{' '}
+                      <span className="font-semibold text-white font-mono">
+                        {formatCurrency(todaySpend.total, currencySymbol)}
+                      </span>{' '}
+                      on {todaySpend.isToday ? 'today' : formatShortDate(todaySpend.date)}, exceeding your daily
+                      threshold by{' '}
+                      <span className="font-semibold text-amber-300 font-mono">
+                        {formatCurrency(todaySpend.total - dailyThreshold, currencySymbol)}
+                      </span>
+                      . Pausing optional spends protects your{' '}
+                      <span className="font-semibold text-white">{linkedGoal?.name || 'Financial Goal'}</span> (
+                      {goalProgress}% funded)!
+                    </>
+                  ) : (
+                    <>
+                      Logged{' '}
+                      <span className="font-semibold text-white font-mono">
+                        {formatCurrency(todaySpend.total, currencySymbol)}
+                      </span>{' '}
+                      of {formatCurrency(dailyThreshold, currencySymbol)} daily allowance. You have{' '}
+                      <span className="font-semibold text-emerald-400 font-mono">
+                        {formatCurrency(dailyThreshold - todaySpend.total, currencySymbol)}
+                      </span>{' '}
+                      buffer remaining to keep{' '}
+                      <span className="font-semibold text-white">{linkedGoal?.name || 'Financial Goal'}</span> on track.
+                    </>
+                  )}
+                </p>
               </div>
             </div>
 
-            {/* Category Progress Bars */}
-            <div className="space-y-3 md:col-span-7 max-h-56 overflow-y-auto pr-1">
-              {pieData.slice(0, 5).map((item) => {
-                const pct =
-                  summary.totalExpenses > 0
-                    ? Math.round((item.value / summary.totalExpenses) * 100)
-                    : 0;
-                return (
-                  <div key={item.name} className="space-y-1">
-                    <div className="flex items-center justify-between text-xs">
-                      <div className="flex items-center gap-2">
-                        <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: item.color }} />
-                        <span className="font-medium text-gray-300">{item.name}</span>
+            <div className="flex items-center gap-3 shrink-0 self-end sm:self-center">
+              <div className="text-right hidden sm:block">
+                <div className="text-xs font-bold font-mono text-white">
+                  {dailyPct}% of limit
+                </div>
+                <div className="text-[10px] text-gray-400">
+                  {todaySpend.count} transaction{todaySpend.count === 1 ? '' : 's'}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onNavigate('settings')}
+                className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-[#2e2e2e] bg-[#1a1a1a] hover:bg-[#252525] text-gray-200 hover:text-white transition cursor-pointer"
+              >
+                Adjust Limit →
+              </button>
+            </div>
+          </div>
+
+          {/* Progress bar */}
+          <div className="mt-3 h-1.5 w-full rounded-full bg-[#222] overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-300 ${
+                isDailyOver
+                  ? 'bg-amber-500'
+                  : dailyPct >= 80
+                  ? 'bg-amber-400'
+                  : 'bg-emerald-500'
+              }`}
+              style={{ width: `${Math.min(100, dailyPct)}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* 3. Main Dashboard Layout (2 Columns) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 sm:gap-6">
+        {/* Left Column: Spending Breakdown & Recent Activity (7 Cols) */}
+        <div className="lg:col-span-7 space-y-5 sm:space-y-6">
+          {/* Spending by Category */}
+          <div className="rounded-xl border border-[#222] bg-[#121212] p-4 sm:p-5 lg:p-6">
+            <div className="flex items-center justify-between border-b border-[#222] pb-3.5">
+              <div>
+                <h2 className="text-sm font-bold text-white">Spending by Category</h2>
+                <p className="text-[11px] text-gray-400">Where your money went this month</p>
+              </div>
+              <button
+                onClick={() => onNavigate('analytics')}
+                className="text-xs font-semibold text-blue-400 hover:text-blue-300 flex items-center gap-1 cursor-pointer"
+              >
+                Analytics <ChevronRight size={13} />
+              </button>
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 sm:grid-cols-12 gap-4 items-center">
+              {/* Donut Chart */}
+              <div className="h-44 sm:col-span-5 relative flex items-center justify-center">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={pieData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={46}
+                      outerRadius={66}
+                      paddingAngle={3}
+                      dataKey="value"
+                    >
+                      {pieData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: '#171717',
+                        borderColor: '#262626',
+                        borderRadius: '8px',
+                        color: '#fff',
+                        fontSize: '11px',
+                      }}
+                      formatter={(val: any) => [
+                        formatCurrency(Number(val), currencySymbol),
+                        'Spent',
+                      ]}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="absolute text-center pointer-events-none">
+                  <span className="text-[9px] font-semibold text-gray-500 uppercase">Spent</span>
+                  <div className="font-mono text-xs font-bold text-white">
+                    {formatCurrency(summary.totalExpenses, currencySymbol)}
+                  </div>
+                </div>
+              </div>
+
+              {/* Category Bars */}
+              <div className="sm:col-span-7 space-y-2.5">
+                {pieData.slice(0, 4).map((item) => {
+                  const pct =
+                    summary.totalExpenses > 0
+                      ? Math.round((item.value / summary.totalExpenses) * 100)
+                      : 0;
+                  return (
+                    <div key={item.name} className="space-y-1">
+                      <div className="flex items-center justify-between text-xs">
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className="h-2 w-2 rounded-full shrink-0"
+                            style={{ backgroundColor: item.color }}
+                          />
+                          <span className="text-gray-300 font-medium text-xs">{item.name}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-xs text-white">
+                            {formatCurrency(item.value, currencySymbol)}
+                          </span>
+                          <span className="text-[10px] text-gray-500 w-7 text-right">
+                            {pct}%
+                          </span>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono font-semibold text-white">
-                          {formatCurrency(item.value, currencySymbol)}
-                        </span>
-                        <span className="text-[11px] font-medium text-gray-500 w-8 text-right">
-                          {pct}%
-                        </span>
+                      <div className="h-1.5 w-full rounded-full bg-[#202020] overflow-hidden">
+                        <div
+                          className="h-full rounded-full transition-all"
+                          style={{ width: `${pct}%`, backgroundColor: item.color }}
+                        />
                       </div>
                     </div>
-                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#262626]">
-                      <div
-                        className="h-full rounded-full transition-all duration-500"
-                        style={{
-                          width: `${pct}%`,
-                          backgroundColor: item.color,
-                        }}
-                      />
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          {/* Recent Transactions */}
+          <div className="rounded-xl border border-[#222] bg-[#121212] p-4 sm:p-5 lg:p-6">
+            <div className="flex items-center justify-between border-b border-[#222] pb-3.5">
+              <div>
+                <h2 className="text-sm font-bold text-white">Recent Transactions</h2>
+                <p className="text-[11px] text-gray-400">Latest recorded activity</p>
+              </div>
+              <button
+                onClick={() => onNavigate('transactions')}
+                className="text-xs font-semibold text-blue-400 hover:text-blue-300 flex items-center gap-1 cursor-pointer"
+              >
+                View All ({summary.transactions.length}) <ChevronRight size={13} />
+              </button>
+            </div>
+
+            <div className="mt-3 divide-y divide-[#1c1c1c]">
+              {recentTransactions.map((tx) => {
+                const cat = categories.find((c) => c.id === tx.categoryId);
+                return (
+                  <div
+                    key={tx.id}
+                    className="flex items-center justify-between py-2.5 first:pt-1 last:pb-0 hover:bg-[#171717] px-2 rounded-lg transition"
+                  >
+                    <div className="flex items-center gap-3">
+                      <CategoryIcon category={cat} categoryId={tx.categoryId} size={16} />
+                      <div>
+                        <div className="text-xs font-semibold text-white">{tx.merchant}</div>
+                        <div className="text-[11px] text-gray-400">
+                          {formatDate(tx.date)} • {cat ? cat.name : tx.categoryId}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div
+                      className={`font-mono text-xs font-bold ${
+                        tx.type === 'income' ? 'text-emerald-400' : 'text-gray-200'
+                      }`}
+                    >
+                      {tx.type === 'income' ? '+' : '-'}
+                      {formatCurrency(tx.amount, currencySymbol)}
                     </div>
                   </div>
                 );
@@ -333,236 +552,142 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
 
-        {/* "What Changed This Month?" (5 Cols) */}
-        <div className="rounded-xl border border-[#262626] bg-[#141414] p-6 shadow-xs lg:col-span-5 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between border-b border-[#262626] pb-4">
+        {/* Right Column: Upcoming Bills & AI Assistant Tips (5 Cols) */}
+        <div className="lg:col-span-5 space-y-5 sm:space-y-6">
+          {/* Upcoming Bills & Subscriptions */}
+          <div className="rounded-xl border border-[#222] bg-[#121212] p-4 sm:p-5 lg:p-6">
+            <div className="flex items-center justify-between border-b border-[#222] pb-3.5">
               <div>
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-white">What Changed This Month?</h2>
-                <p className="text-xs text-gray-500">August vs July variance breakdown</p>
+                <h2 className="text-sm font-bold text-white">Upcoming Bills</h2>
+                <p className="text-[11px] text-gray-400">Scheduled auto-debits & payments</p>
               </div>
-              <div className="rounded-md bg-blue-600/10 border border-blue-500/20 px-2.5 py-1 text-xs font-semibold text-blue-400">
-                MoM Delta
-              </div>
+              <button
+                onClick={() => setIsRecurringModalOpen(true)}
+                className="text-xs font-semibold text-purple-400 hover:text-purple-300 flex items-center gap-1 cursor-pointer"
+              >
+                Manage <ChevronRight size={13} />
+              </button>
             </div>
 
-            <p className="mt-4 text-xs font-medium text-gray-300 leading-relaxed">
-              {momComparison.summaryNarration}
-            </p>
-
-            <div className="mt-4 space-y-2.5">
-              {momComparison.items.slice(0, 3).map((item) => (
-                <div
-                  key={item.categoryId}
-                  className="flex items-center justify-between rounded-lg bg-[#1a1a1a] border border-[#262626] p-2.5 text-xs"
-                >
-                  <div>
-                    <span className="font-semibold text-gray-200">{item.categoryName}</span>
-                    <div className="text-[11px] text-gray-500 font-mono">
-                      {formatCurrency(item.previousAmount, currencySymbol)} →{' '}
-                      {formatCurrency(item.currentAmount, currencySymbol)}
-                    </div>
-                  </div>
-
+            {upcomingBills.length > 0 ? (
+              <div className="mt-3 space-y-2.5">
+                {upcomingBills.map((item) => (
                   <div
-                    className={`flex items-center gap-1 font-mono font-bold ${
-                      item.diffAmount > 0 ? 'text-rose-400' : 'text-emerald-400'
-                    }`}
+                    key={`${item.scheduleId}-${item.date}`}
+                    className="flex items-center justify-between p-2.5 rounded-lg bg-[#181818] border border-[#262626]"
                   >
-                    {item.diffAmount > 0 ? (
-                      <TrendingUp size={14} />
-                    ) : (
-                      <TrendingDown size={14} />
-                    )}
-                    <span>
-                      {item.diffAmount > 0 ? '+' : ''}
-                      {formatCurrency(item.diffAmount, currencySymbol)}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="mt-4 pt-3 border-t border-[#262626] flex items-center justify-between">
-            <span className="text-xs text-gray-500">Want to curb sudden spikes?</span>
-            <button
-              onClick={onOpenBeforeSpend}
-              className="text-xs font-bold text-blue-400 hover:text-blue-300"
-            >
-              Run Purchase Check →
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Row 3: AI Intelligence Feed & Weekly Heatmap */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-        {/* AI Insight Highlights (7 Cols) */}
-        <div className="rounded-xl border border-blue-500/20 bg-blue-600/5 p-6 shadow-xs lg:col-span-7">
-          <div className="flex items-center justify-between border-b border-[#262626] pb-4">
-            <div className="flex items-center gap-2">
-              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-500/20 text-blue-400">
-                <Sparkles size={16} />
-              </div>
-              <div>
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-blue-400">AI Intelligence Pulse</h2>
-                <p className="text-xs text-gray-400">
-                  Real-time anomalies, money leaks, and behavioral patterns
-                </p>
-              </div>
-            </div>
-            <button
-              onClick={() => onNavigate('insights')}
-              className="text-xs font-bold text-blue-400 hover:text-blue-300 uppercase tracking-wider"
-            >
-              View All ({insights.length}) →
-            </button>
-          </div>
-
-          <div className="mt-4 space-y-3">
-            {insights.slice(0, 3).map((ins) => (
-              <div
-                key={ins.id}
-                className="rounded-xl border border-[#262626] bg-[#141414] p-4 transition hover:bg-[#1a1a1a]"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <span className="text-xs font-bold text-white">{ins.title}</span>
-                    <p className="mt-1 text-xs text-gray-300 leading-relaxed">
-                      {ins.description}
-                    </p>
-                  </div>
-                  <span className="rounded-md bg-blue-500/20 text-blue-300 border border-blue-500/30 px-2 py-0.5 text-[10px] font-bold shrink-0">
-                    {ins.confidenceScore}% AI Score
-                  </span>
-                </div>
-
-                {ins.actionRecommendation && (
-                  <div className="mt-2.5 rounded-lg bg-[#1a1a1a] p-2.5 text-[11px] font-medium text-gray-300 border border-[#262626]">
-                    <strong className="text-blue-400 font-semibold">Recommendation:</strong>{' '}
-                    {ins.actionRecommendation}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Weekly Spending Rhythm (5 Cols) */}
-        <div className="rounded-xl border border-[#262626] bg-[#141414] p-6 shadow-xs lg:col-span-5 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between border-b border-[#262626] pb-4">
-              <div>
-                <h2 className="text-sm font-semibold uppercase tracking-wider text-white">Weekly Outflow Cadence</h2>
-                <p className="text-xs text-gray-500">Spending velocity across weeks</p>
-              </div>
-              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#1a1a1a] text-gray-400">
-                <Calendar size={15} />
-              </div>
-            </div>
-
-            <div className="mt-4 h-48 w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={weeklyData}>
-                  <XAxis dataKey="name" tick={{ fontSize: 11 }} stroke="#666666" />
-                  <YAxis
-                    tick={{ fontSize: 11 }}
-                    stroke="#666666"
-                    tickFormatter={(v) => `₹${v / 1000}k`}
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: '#141414',
-                      borderColor: '#262626',
-                      borderRadius: '10px',
-                      color: '#e5e5e5',
-                      fontSize: '12px',
-                    }}
-                    formatter={(val: any) => [
-                      formatCurrency(Number(val), currencySymbol),
-                      'Total Outflow',
-                    ]}
-                  />
-                  <Bar dataKey="amount" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-
-            <p className="text-[11px] text-gray-500 mt-2 text-center">
-              Week 1 was heavy due to Rent & monthly commitments; Week 3 spiked from gadget upgrade.
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* Row 4: Recent Transactions */}
-      <div className="rounded-xl border border-[#262626] bg-[#141414] p-6 shadow-xs">
-        <div className="flex items-center justify-between border-b border-[#262626] pb-4">
-          <div>
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-white">Recent Intelligence</h2>
-            <p className="text-xs text-gray-500">Live recorded activity across your accounts</p>
-          </div>
-          <button
-            onClick={() => onNavigate('transactions')}
-            className="text-xs font-bold text-blue-400 hover:text-blue-300 flex items-center gap-1 uppercase tracking-wider"
-          >
-            All Transactions ({summary.transactions.length}) <ChevronRight size={14} />
-          </button>
-        </div>
-
-        <div className="mt-4 divide-y divide-[#212121] overflow-hidden rounded-xl border border-[#262626] bg-[#141414]">
-          {recentTransactions.map((tx) => {
-            const cat = categories.find((c) => c.id === tx.categoryId);
-            return (
-              <div
-                key={tx.id}
-                className="flex items-center justify-between p-3.5 transition hover:bg-[#1a1a1a]"
-              >
-                <div className="flex items-center gap-3">
-                  <CategoryIcon category={cat} categoryId={tx.categoryId} size={18} />
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-bold text-white">{tx.merchant}</span>
-                      {tx.isAnomaly && (
-                        <span className="rounded bg-rose-500/10 text-rose-400 border border-rose-500/20 px-1.5 py-0.5 text-[9px] font-bold uppercase">
-                          Unusual Spike
-                        </span>
-                      )}
-                      {tx.type === 'refund' && (
-                        <span className="rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 px-1.5 py-0.5 text-[9px] font-bold uppercase">
-                          Refund
-                        </span>
-                      )}
-                      {tx.isRecurring && (
-                        <span className="rounded bg-purple-500/10 text-purple-400 border border-purple-500/20 px-1.5 py-0.5 text-[9px] font-bold uppercase">
-                          Recurring
-                        </span>
-                      )}
+                    <div>
+                      <div className="text-xs font-semibold text-white">{item.name}</div>
+                      <div className="text-[11px] text-gray-400">
+                        Due {formatShortDate(item.date)} • {item.recurringType.toUpperCase()}
+                      </div>
                     </div>
-                    <div className="text-[11px] text-gray-500 mt-0.5">
-                      {formatDate(tx.date)} • {tx.paymentMethod} • {cat ? cat.name : tx.categoryId}
+
+                    <div className="flex items-center gap-2.5">
+                      <span className="font-mono text-xs font-bold text-white">
+                        {formatCurrency(item.amount, currencySymbol)}
+                      </span>
+                      <button
+                        onClick={() => handleInjectSingle(item.scheduleId, item.date)}
+                        className="rounded bg-purple-600/20 hover:bg-purple-600 hover:text-white text-purple-300 px-2 py-1 text-[10px] font-bold border border-purple-500/30 transition cursor-pointer"
+                      >
+                        Settle
+                      </button>
                     </div>
                   </div>
-                </div>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-4 text-center py-4 text-xs text-gray-500">
+                <CheckCircle2 size={20} className="mx-auto mb-1 text-emerald-400" />
+                All bills for this month have been settled!
+              </div>
+            )}
 
-                <div
-                  className={`font-mono text-sm font-extrabold ${
-                    tx.type === 'income'
-                      ? 'text-emerald-400'
-                      : tx.type === 'refund'
-                      ? 'text-blue-400'
-                      : 'text-gray-200'
-                  }`}
+            <div className="mt-4 pt-3 border-t border-[#222] flex items-center justify-between">
+              <button
+                onClick={handleRunAutoInject}
+                className="text-[11px] font-bold text-emerald-400 hover:underline flex items-center gap-1 cursor-pointer"
+              >
+                <Zap size={12} /> Auto-inject all due bills
+              </button>
+              <button
+                onClick={() => onNavigate('goals')}
+                className="text-[11px] font-medium text-gray-400 hover:text-white cursor-pointer"
+              >
+                Track Financial Goals →
+              </button>
+            </div>
+          </div>
+
+          {/* AI Smart Insight Card */}
+          {topInsight && (
+            <div className="rounded-xl border border-blue-500/20 bg-blue-600/5 p-4 sm:p-5 lg:p-6">
+              <div className="flex items-center gap-2 text-blue-400 mb-2">
+                <Sparkles size={15} />
+                <span className="text-xs font-bold uppercase tracking-wider">AI Financial Tip</span>
+              </div>
+              <h3 className="text-xs font-bold text-white">{topInsight.title}</h3>
+              <p className="mt-1 text-xs text-gray-300 leading-relaxed">
+                {topInsight.description}
+              </p>
+              {topInsight.actionRecommendation && (
+                <div className="mt-3 rounded-lg bg-[#141414] p-2.5 text-[11px] text-gray-300 border border-[#262626]">
+                  <span className="text-blue-400 font-semibold">Tip: </span>
+                  {topInsight.actionRecommendation}
+                </div>
+              )}
+              <div className="mt-3 text-right">
+                <button
+                  onClick={() => onNavigate('insights')}
+                  className="text-xs font-semibold text-blue-400 hover:underline cursor-pointer"
                 >
-                  {tx.type === 'income' ? '+' : tx.type === 'refund' ? '↺ ' : '-'}
-                  {formatCurrency(tx.amount, currencySymbol)}
-                </div>
+                  View all smart insights →
+                </button>
               </div>
-            );
-          })}
+            </div>
+          )}
+
+          {/* Quick Helpful Tools Card */}
+          <div className="rounded-xl border border-[#222] bg-[#121212] p-3.5 sm:p-4.5 lg:p-5">
+            <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2.5">
+              Helpful Tools
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={onOpenBeforeSpend}
+                className="p-2.5 rounded-lg bg-[#181818] border border-[#262626] hover:border-blue-500/30 text-left transition cursor-pointer"
+              >
+                <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                  <ShieldCheck size={13} className="text-blue-400" />
+                  <span>Spend Check</span>
+                </div>
+                <div className="text-[10px] text-gray-400 mt-0.5">Test large purchases</div>
+              </button>
+
+              <button
+                onClick={() => onNavigate('statements')}
+                className="p-2.5 rounded-lg bg-[#181818] border border-[#262626] hover:border-blue-500/30 text-left transition cursor-pointer"
+              >
+                <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                  <Receipt size={13} className="text-emerald-400" />
+                  <span>Import PDF</span>
+                </div>
+                <div className="text-[10px] text-gray-400 mt-0.5">Bank statements</div>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
+
+      {/* Recurring Schedule Management Modal */}
+      <RecurringScheduleModal
+        isOpen={isRecurringModalOpen}
+        onClose={() => setIsRecurringModalOpen(false)}
+        currencySymbol={currencySymbol}
+        onSchedulesUpdated={loadData}
+      />
     </div>
   );
 };
+

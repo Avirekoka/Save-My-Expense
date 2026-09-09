@@ -11,7 +11,6 @@
 html.overflow-hidden,
 body.overflow-hidden {
   overflow: hidden !important;
-  touch-action: none;
 }
 
 /* Custom sleek dark scrollbar */
@@ -35,7 +34,16 @@ body.overflow-hidden {
   background: #404040;
 }
 
+/* Sidebar scrolling: touch and pointer optimization for tablet and mobile */
+#desktop-sidebar {
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+
 #sidebar-scrollable-content {
   scrollbar-width: thin;
   scrollbar-color: #333333 transparent;
+  -webkit-overflow-scrolling: touch !important;
+  touch-action: pan-y !important;
+  overscroll-behavior-y: contain;
 }

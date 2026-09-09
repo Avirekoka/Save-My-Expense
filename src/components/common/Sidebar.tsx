@@ -24,6 +24,7 @@ import { formatCurrency, getLastThreeMonths } from '../../utils/formatters';
 import { useAuth } from '../../services/firebase/AuthContext';
 import { storageService, NOTIFY_EVENT } from '../../services/storage/storage.service';
 import { useScrollLock } from '../../hooks/useScrollLock';
+import { useRouter, AppRoute } from '../../router/RouterContext';
 
 interface SidebarProps {
   activeView: string;
@@ -59,7 +60,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenAuthModal,
 }) => {
   const { user, logOut } = useAuth();
-  useScrollLock(isMobileOpen);
+  const { currentRoute, navigate } = useRouter();
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, badge: null },
@@ -122,9 +123,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Sidebar Drawer Container */}
       <aside
         id="desktop-sidebar"
-        className={`fixed inset-y-0 left-0 z-50 flex w-80 max-w-[86vw] lg:w-64 shrink-0 flex-col border-r border-[#262626] bg-[#0d0d0d] shadow-2xl transition-transform duration-200 ease-in-out lg:static lg:h-full lg:max-h-full lg:min-h-0 lg:translate-x-0 lg:z-auto ${
+        className={`fixed inset-y-0 left-0 z-50 flex h-full h-[100dvh] max-h-screen max-h-[100dvh] min-h-0 w-80 max-w-[86vw] md:w-72 lg:w-64 shrink-0 flex-col overflow-hidden border-r border-[#262626] bg-[#0d0d0d] shadow-2xl transition-transform duration-200 ease-in-out lg:static lg:h-full lg:max-h-full lg:min-h-0 lg:translate-x-0 lg:z-auto ${
           isMobileOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
+        style={{ WebkitOverflowScrolling: 'touch', touchAction: 'pan-y' }}
       >
         {/* Mobile / Tablet Drawer Header with Close Button */}
         <div className="flex lg:hidden items-center justify-between border-b border-[#262626] px-4 py-3.5 bg-[#121212] shrink-0">
@@ -150,7 +152,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Scrollable Container */}
         <div
           id="sidebar-scrollable-content"
-          className="flex-1 min-h-0 overflow-y-auto px-3 py-3.5 space-y-3.5 overscroll-contain"
+          onTouchMove={(e) => e.stopPropagation()}
+          className="flex-1 min-h-0 h-full overflow-y-auto overflow-x-hidden px-3 py-3.5 space-y-3.5 overscroll-contain touch-pan-y"
+          style={{
+            WebkitOverflowScrolling: 'touch',
+            touchAction: 'pan-y',
+            overscrollBehaviorY: 'contain',
+          }}
         >
           {/* Quick Action Hub for primary actions & smart tools */}
           <div className="space-y-2 rounded-xl border border-[#262626] bg-[#121212] p-2.5 shadow-xs">
@@ -286,7 +294,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <span>Guarding {targetGoal?.name || 'Financial Goal'}</span>
                   )}
                 </span>
-                <span className="text-blue-400 font-semibold hover:underline shrink-0">Adjust →</span>
+                <button
+                  onClick={() => {
+                    navigate('settings');
+                    onSelectView('settings');
+                    if (isMobileOpen) onCloseMobile();
+                  }}
+                  className="text-blue-400 font-semibold hover:underline shrink-0 cursor-pointer"
+                >
+                  Adjust →
+                </button>
               </div>
             </div>
           )}
@@ -344,11 +361,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div className="space-y-1">
               {navItems.map((item) => {
                 const Icon = item.icon;
-                const isActive = activeView === item.id;
+                const isActive = (currentRoute === item.id) || (activeView === item.id);
                 return (
                   <button
                     key={item.id}
                     onClick={() => {
+                      navigate(item.id as AppRoute);
                       onSelectView(item.id);
                       onCloseMobile();
                     }}
@@ -390,6 +408,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div className="flex items-center justify-between rounded-xl border border-[#262626] bg-[#141414] p-2.5 shadow-xs">
               <div
                 onClick={() => {
+                  navigate('settings');
                   onSelectView('settings');
                   if (isMobileOpen) onCloseMobile();
                 }}

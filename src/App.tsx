@@ -1,29 +1,33 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Loader2, Sparkles, ShieldAlert, LogIn, UserPlus } from 'lucide-react';
+import React, { useState, useEffect, useRef, Suspense } from 'react';
+import { Loader2, Sparkles, ShieldAlert } from 'lucide-react';
 import { Header } from './components/common/Header';
 import { Sidebar } from './components/common/Sidebar';
 import { Footer } from './components/common/Footer';
-import { DashboardView } from './components/views/DashboardView';
-import { TransactionsView } from './components/views/TransactionsView';
-import { MonthWiseExpenseView } from './components/views/MonthWiseExpenseView';
-import { StatementsView } from './components/views/StatementsView';
-import { AnalyticsView } from './components/views/AnalyticsView';
-import { BudgetsView } from './components/views/BudgetsView';
-import { GoalsView } from './components/views/GoalsView';
-import { InsightsView } from './components/views/InsightsView';
-import { DebtView } from './components/views/DebtView';
-import { SettingsView } from './components/views/SettingsView';
-import { LandingPageView } from './components/views/LandingPageView';
+import { PageLoadingSkeleton } from './components/common/PageLoadingSkeleton';
 import { AddTransactionModal } from './components/modals/AddTransactionModal';
 import { ReceiptScannerModal, ScannedReceiptData } from './components/modals/ReceiptScannerModal';
 import { AskMoneyDialog } from './components/modals/AskMoneyDialog';
 import { BeforeYouSpendModal } from './components/modals/BeforeYouSpendModal';
 import { AuthModal } from './components/modals/AuthModal';
 import { AuthProvider, useAuth } from './services/firebase/AuthContext';
+import { RouterProvider, useRouter, AppRoute, ROUTE_PATHS } from './router/RouterContext';
 import { storageService, NOTIFY_EVENT } from './services/storage/storage.service';
 import { Transaction } from './types';
 import { getCurrencySymbol } from './utils/currency';
 import { initGlobalModalScrollListener } from './hooks/useScrollLock';
+
+// Code-split page components (lazy loaded on route request)
+const DashboardPage = React.lazy(() => import('./pages/DashboardPage'));
+const TransactionsPage = React.lazy(() => import('./pages/TransactionsPage'));
+const MonthWisePage = React.lazy(() => import('./pages/MonthWisePage'));
+const StatementsPage = React.lazy(() => import('./pages/StatementsPage'));
+const AnalyticsPage = React.lazy(() => import('./pages/AnalyticsPage'));
+const BudgetsPage = React.lazy(() => import('./pages/BudgetsPage'));
+const GoalsPage = React.lazy(() => import('./pages/GoalsPage'));
+const InsightsPage = React.lazy(() => import('./pages/InsightsPage'));
+const DebtPage = React.lazy(() => import('./pages/DebtPage'));
+const SettingsPage = React.lazy(() => import('./pages/SettingsPage'));
+const LandingPage = React.lazy(() => import('./pages/LandingPage'));
 
 // Route Access Categories
 export const RESTRICTED_ROUTES = [
@@ -45,7 +49,7 @@ export type RouteView = (typeof RESTRICTED_ROUTES)[number] | (typeof PUBLIC_ROUT
 
 function MainAppContent() {
   const { user, loading, signInAsDemo } = useAuth();
-  const [activeView, setActiveView] = useState<RouteView>(user ? 'dashboard' : 'landing');
+  const { currentRoute, navigate } = useRouter();
   const [authModalMode, setAuthModalMode] = useState<'signin' | 'signup'>('signin');
   const [selectedMonth, setSelectedMonth] = useState<string>('2026-08');
   const [currencySymbol, setCurrencySymbol] = useState<string>('₹');
@@ -66,38 +70,36 @@ function MainAppContent() {
   const [monthlyExpense, setMonthlyExpense] = useState<number>(72450);
   const mainScrollRef = useRef<HTMLElement>(null);
 
-  // Synchronize view with authentication status
+  // Route Access Guard: redirect unauthenticated users away from restricted routes
   useEffect(() => {
     if (!loading) {
       if (!user) {
-        // Unauthenticated: Strictly forbid restricted routes
-        if (RESTRICTED_ROUTES.includes(activeView as any)) {
-          setActiveView('landing');
+        if (RESTRICTED_ROUTES.includes(currentRoute as any)) {
+          navigate('landing');
         }
       } else {
-        // Authenticated: If user was on the landing page, transition into dashboard
-        if (activeView === 'landing') {
-          setActiveView('dashboard');
+        if (currentRoute === 'landing') {
+          navigate('dashboard');
         }
       }
     }
-  }, [user, loading, activeView]);
+  }, [user, loading, currentRoute, navigate]);
 
-  // Route Navigation Guard: Blocks unauthenticated access to restricted views
+  // Route Navigation Handler
   const handleNavigate = (targetView: string) => {
     if (!user && RESTRICTED_ROUTES.includes(targetView as any)) {
       setAccessDeniedNotice(`Authentication required to view ${targetView}. Please sign in or register.`);
       setAuthModalMode('signin');
       setIsAuthModalOpen(true);
-      setActiveView('landing');
+      navigate('landing');
       return;
     }
     setAccessDeniedNotice(null);
-    setActiveView(targetView as RouteView);
+    navigate(targetView as AppRoute);
     if (isMobileSidebarOpen) setIsMobileSidebarOpen(false);
   };
 
-  // Action Guard: Blocks unauthenticated users from performing any actions
+  // Action Guard: Blocks unauthenticated users from performing actions
   const requireAuthForAction = (actionName: string, callback: () => void) => {
     if (!user) {
       setAccessDeniedNotice(`You must be logged in to ${actionName}.`);
@@ -108,25 +110,31 @@ function MainAppContent() {
     callback();
   };
 
-  // Scroll to top whenever activeView changes
+  // Scroll to top whenever currentRoute changes
   useEffect(() => {
     if (mainScrollRef.current) {
       mainScrollRef.current.scrollTop = 0;
     }
     window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
-  }, [activeView]);
+  }, [currentRoute]);
 
   const refreshFinancials = () => {
     const profile = storageService.getUserProfile();
-    setCurrencySymbol(getCurrencySymbol(profile.currencySymbol || profile.currency || '₹'));
     setMonthlyIncome(profile.monthlyIncome || 120000);
+    setCurrencySymbol(profile.currencySymbol || profile.currency || '₹');
 
-    const summary = storageService.calculateMonthSummary(
-      selectedMonth === 'all' ? '2026-08' : selectedMonth
-    );
-    setMonthlyExpense(summary.totalExpenses);
+    const allTransactions = storageService.getTransactions();
+    const monthExpenses = allTransactions
+      .filter((t) => {
+        if (selectedMonth === 'all') return t.type === 'expense';
+        return t.type === 'expense' && t.date.startsWith(selectedMonth);
+      })
+      .reduce((sum, t) => sum + t.amount, 0);
+
+    setMonthlyExpense(monthExpenses > 0 ? monthExpenses : 72450);
   };
 
+  // Global modal listener for scroll locking
   useEffect(() => {
     return initGlobalModalScrollListener();
   }, []);
@@ -141,7 +149,9 @@ function MainAppContent() {
   useEffect(() => {
     if (user && !storageService.isDemoUser()) {
       const currentProfile = storageService.getUserProfile();
-      const isSeedEmail = currentProfile.email === 'ashwin.finance@spendai.io' || currentProfile.email === 'user@example.com';
+      const isSeedEmail =
+        currentProfile.email === 'ashwin.finance@spendai.io' ||
+        currentProfile.email === 'user@example.com';
       if (user.email && (!currentProfile.email || isSeedEmail)) {
         storageService.saveUserProfile({
           ...currentProfile,
@@ -203,7 +213,7 @@ function MainAppContent() {
   }
 
   // NON-RESTRICTED ROUTE: Unauthenticated Landing Page
-  if (!user || activeView === 'landing') {
+  if (!user || currentRoute === 'landing') {
     return (
       <>
         {/* Access Denied Banner if user was redirected */}
@@ -230,16 +240,18 @@ function MainAppContent() {
           </div>
         )}
 
-        <LandingPageView
-          onOpenAuth={(mode) => {
-            setAuthModalMode(mode || 'signin');
-            setIsAuthModalOpen(true);
-          }}
-          onInstantDemo={async () => {
-            await signInAsDemo();
-            setActiveView('dashboard');
-          }}
-        />
+        <Suspense fallback={<PageLoadingSkeleton />}>
+          <LandingPage
+            onOpenAuth={(mode) => {
+              setAuthModalMode(mode || 'signin');
+              setIsAuthModalOpen(true);
+            }}
+            onInstantDemo={async () => {
+              await signInAsDemo();
+              navigate('dashboard');
+            }}
+          />
+        </Suspense>
 
         {/* Auth Modal */}
         <AuthModal
@@ -273,10 +285,10 @@ function MainAppContent() {
       />
 
       {/* Main Layout Container */}
-      <div className="flex flex-1 min-h-0 h-[calc(100vh-4rem)] overflow-hidden">
+      <div className="flex flex-1 min-h-0 h-full max-h-[calc(100dvh-4rem)] overflow-hidden">
         {/* Sidebar */}
         <Sidebar
-          activeView={activeView}
+          activeView={currentRoute}
           onSelectView={handleNavigate}
           monthlyIncome={monthlyIncome}
           monthlyExpense={monthlyExpense}
@@ -295,92 +307,94 @@ function MainAppContent() {
           }}
         />
 
-        {/* Dynamic Content View Area */}
+        {/* Dynamic Content View Area with Suspense Page Code-Splitting */}
         <main
           ref={mainScrollRef}
           id="main-content-scroll"
           className="flex-1 min-h-0 h-full overflow-y-auto p-4 sm:p-6 lg:p-8 flex flex-col justify-between"
         >
           <div className="max-w-7xl mx-auto w-full flex-1">
-            {activeView === 'dashboard' && (
-              <DashboardView
-                currentMonth={selectedMonth}
-                currencySymbol={currencySymbol}
-                onNavigate={handleNavigate}
-                onOpenAddModal={() => handleOpenAdd()}
-                onOpenBeforeSpend={handleOpenBeforeSpend}
-                onOpenAskMoney={handleOpenAskMoney}
-                onOpenScanReceipt={handleOpenScanReceipt}
-              />
-            )}
+            <Suspense fallback={<PageLoadingSkeleton />}>
+              {currentRoute === 'dashboard' && (
+                <DashboardPage
+                  currentMonth={selectedMonth}
+                  currencySymbol={currencySymbol}
+                  onNavigate={handleNavigate}
+                  onOpenAddModal={() => handleOpenAdd()}
+                  onOpenBeforeSpend={handleOpenBeforeSpend}
+                  onOpenAskMoney={handleOpenAskMoney}
+                  onOpenScanReceipt={handleOpenScanReceipt}
+                />
+              )}
 
-            {activeView === 'transactions' && (
-              <TransactionsView
-                currentMonth={selectedMonth}
-                currencySymbol={currencySymbol}
-                onOpenAddModal={handleOpenAdd}
-                onOpenScanReceipt={handleOpenScanReceipt}
-              />
-            )}
+              {currentRoute === 'transactions' && (
+                <TransactionsPage
+                  currentMonth={selectedMonth}
+                  currencySymbol={currencySymbol}
+                  onOpenAddModal={handleOpenAdd}
+                  onOpenScanReceipt={handleOpenScanReceipt}
+                />
+              )}
 
-            {activeView === 'monthwise' && (
-              <MonthWiseExpenseView
-                currencySymbol={currencySymbol}
-                onNavigate={handleNavigate}
-                onSelectMonth={(month) => {
-                  setSelectedMonth(month);
-                  handleNavigate('transactions');
-                }}
-                onOpenAddModal={() => handleOpenAdd()}
-              />
-            )}
+              {currentRoute === 'monthwise' && (
+                <MonthWisePage
+                  currencySymbol={currencySymbol}
+                  onNavigate={handleNavigate}
+                  onSelectMonth={(month) => {
+                    setSelectedMonth(month);
+                    handleNavigate('transactions');
+                  }}
+                  onOpenAddModal={() => handleOpenAdd()}
+                />
+              )}
 
-            {activeView === 'statements' && (
-              <StatementsView
-                currencySymbol={currencySymbol}
-                onNavigate={handleNavigate}
-              />
-            )}
+              {currentRoute === 'statements' && (
+                <StatementsPage
+                  currencySymbol={currencySymbol}
+                  onNavigate={handleNavigate}
+                />
+              )}
 
-            {activeView === 'analytics' && (
-              <AnalyticsView
-                currentMonth={selectedMonth}
-                currencySymbol={currencySymbol}
-              />
-            )}
+              {currentRoute === 'analytics' && (
+                <AnalyticsPage
+                  currentMonth={selectedMonth}
+                  currencySymbol={currencySymbol}
+                />
+              )}
 
-            {activeView === 'budgets' && (
-              <BudgetsView
-                currentMonth={selectedMonth}
-                currencySymbol={currencySymbol}
-              />
-            )}
+              {currentRoute === 'budgets' && (
+                <BudgetsPage
+                  currentMonth={selectedMonth}
+                  currencySymbol={currencySymbol}
+                />
+              )}
 
-            {activeView === 'goals' && (
-              <GoalsView currencySymbol={currencySymbol} />
-            )}
+              {currentRoute === 'goals' && (
+                <GoalsPage currencySymbol={currencySymbol} />
+              )}
 
-            {activeView === 'insights' && (
-              <InsightsView
-                currentMonth={selectedMonth}
-                currencySymbol={currencySymbol}
-              />
-            )}
+              {currentRoute === 'insights' && (
+                <InsightsPage
+                  currentMonth={selectedMonth}
+                  currencySymbol={currencySymbol}
+                />
+              )}
 
-            {activeView === 'debt' && (
-              <DebtView currencySymbol={currencySymbol} />
-            )}
+              {currentRoute === 'debt' && (
+                <DebtPage currencySymbol={currencySymbol} />
+              )}
 
-            {activeView === 'settings' && (
-              <SettingsView
-                currencySymbol={currencySymbol}
-                onUpdateCurrency={setCurrencySymbol}
-                onOpenAuthModal={() => {
-                  setAuthModalMode('signin');
-                  setIsAuthModalOpen(true);
-                }}
-              />
-            )}
+              {currentRoute === 'settings' && (
+                <SettingsPage
+                  currencySymbol={currencySymbol}
+                  onUpdateCurrency={setCurrencySymbol}
+                  onOpenAuthModal={() => {
+                    setAuthModalMode('signin');
+                    setIsAuthModalOpen(true);
+                  }}
+                />
+              )}
+            </Suspense>
           </div>
 
           <Footer
@@ -388,11 +402,13 @@ function MainAppContent() {
             onOpenAskMoney={handleOpenAskMoney}
             onOpenBeforeSpend={handleOpenBeforeSpend}
             onOpenAddModal={() => handleOpenAdd()}
+            onOpenScanReceipt={handleOpenScanReceipt}
+            currencySymbol={currencySymbol}
           />
         </main>
       </div>
 
-      {/* Interactive Modals - Only rendered & accessible for authenticated users */}
+      {/* Global Interactive Modals */}
       <AddTransactionModal
         isOpen={isAddModalOpen}
         onClose={() => {
@@ -434,11 +450,19 @@ function MainAppContent() {
   );
 }
 
-export default function App() {
+function RootRouterApp() {
+  const { user } = useAuth();
   return (
-    <AuthProvider>
+    <RouterProvider isAuthenticated={Boolean(user)}>
       <MainAppContent />
-    </AuthProvider>
+    </RouterProvider>
   );
 }
 
+export default function App() {
+  return (
+    <AuthProvider>
+      <RootRouterApp />
+    </AuthProvider>
+  );
+}

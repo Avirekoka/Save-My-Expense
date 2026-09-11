@@ -8,6 +8,9 @@ import {
   TransactionType,
 } from '../../types';
 import { storageService, NOTIFY_EVENT } from '../storage/storage.service';
+import { getCurrentMonth } from '../../utils/formatters';
+
+const getTodayIso = () => new Date().toISOString().slice(0, 10);
 
 class RecurringTransactionService {
   /**
@@ -134,13 +137,14 @@ class RecurringTransactionService {
    */
   computeMonthOccurrences(
     monthStr: string,
-    currentDateStr: string = '2026-08-28'
+    currentDateStr: string = getTodayIso()
   ): RecurringProjectedOccurrence[] {
     const schedules = this.getSchedules();
     const transactions = storageService.getTransactions();
 
     // Parse year and month
-    const [yearPart, monthPart] = (monthStr === 'all' ? '2026-08' : monthStr).split('-');
+    const effectiveMonth = monthStr === 'all' || !monthStr ? getCurrentMonth() : monthStr;
+    const [yearPart, monthPart] = effectiveMonth.split('-');
     const year = parseInt(yearPart, 10);
     const month = parseInt(monthPart, 10); // 1-indexed
 
@@ -259,7 +263,7 @@ class RecurringTransactionService {
    */
   getRecurringMonthSummary(
     monthStr: string,
-    currentDateStr: string = '2026-08-28'
+    currentDateStr: string = getTodayIso()
   ): RecurringMonthSummary {
     const occurrences = this.computeMonthOccurrences(monthStr, currentDateStr);
 
@@ -327,7 +331,7 @@ class RecurringTransactionService {
    * and NOT already present in transactions will be injected.
    */
   autoInjectDueTransactions(
-    targetDateStr: string = '2026-08-28'
+    targetDateStr: string = getTodayIso()
   ): {
     injectedCount: number;
     injectedTransactions: Transaction[];

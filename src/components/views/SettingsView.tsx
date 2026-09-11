@@ -34,6 +34,8 @@ import { formatCurrency, SUPPORTED_CURRENCIES, getCurrencySymbol } from '../../u
 import { CategoryIcon } from '../common/CategoryIcon';
 import { useAuth } from '../../services/firebase/AuthContext';
 import { useScrollLock } from '../../hooks/useScrollLock';
+import { WhatsAppIntegrationCard } from '../whatsapp/WhatsAppIntegrationCard';
+import { ThemeToggleCard } from '../settings/ThemeToggleCard';
 
 const AVATAR_PRESETS = [
   { id: '1', url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80', label: 'Preset 1' },
@@ -48,12 +50,14 @@ interface SettingsViewProps {
   currencySymbol: string;
   onUpdateCurrency: (symbol: string) => void;
   onOpenAuthModal?: () => void;
+  onNavigate?: (view: string) => void;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
   currencySymbol,
   onUpdateCurrency,
   onOpenAuthModal,
+  onNavigate,
 }) => {
   const { user, logOut, updateUserData } = useAuth();
   const [profile, setProfile] = useState<UserProfile>(storageService.getUserProfile());
@@ -622,6 +626,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </form>
       </div>
+
+      {/* Manual Theme & Display Accessibility Selector */}
+      <ThemeToggleCard />
+
+      {/* WhatsApp Business Cloud API Webhook Integration & Live Simulator */}
+      <WhatsAppIntegrationCard onNavigate={onNavigate} />
 
       {/* Daily Spending Limit & Financial Goal Nudge Setting Card */}
       <div id="daily-spending-alert-settings" className="rounded-xl border border-[#262626] bg-[#141414] p-6 shadow-xs relative overflow-hidden">

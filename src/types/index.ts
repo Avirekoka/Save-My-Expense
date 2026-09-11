@@ -15,7 +15,7 @@ export type PaymentMethod =
   | 'Bank Transfer'
   | 'Net Banking';
 
-export type TransactionSource = 'manual' | 'statement' | 'import';
+export type TransactionSource = 'manual' | 'statement' | 'import' | 'whatsapp';
 
 export interface Transaction {
   id: string;
@@ -157,6 +157,8 @@ export interface DailySpendingAlertSetting {
   lastAlertDate?: string; // Last date (YYYY-MM-DD) an alert was generated
 }
 
+export type ThemeMode = 'system' | 'dark' | 'light';
+
 export interface UserProfile {
   id: string;
   name: string;
@@ -169,6 +171,7 @@ export interface UserProfile {
   monthlyIncome: number;
   primaryGoal: string;
   onboardingCompleted: boolean;
+  theme?: ThemeMode;
   aiPreferences: {
     autoCategorize: boolean;
     alertThreshold: number;

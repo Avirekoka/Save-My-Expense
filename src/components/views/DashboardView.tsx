@@ -36,7 +36,7 @@ import { recurringService } from '../../services/recurring/recurring.service';
 import { RecurringScheduleModal } from '../modals/RecurringScheduleModal';
 import { SpendingAnalyzer } from '../../services/ai/spending-analyzer';
 import { InsightGenerator } from '../../services/ai/insight-generator';
-import { formatCurrency, formatDate, formatShortDate, getMonthName } from '../../utils/formatters';
+import { formatCurrency, formatDate, formatShortDate, getMonthName, getCurrentMonth, getPreviousMonth } from '../../utils/formatters';
 import { CategoryIcon } from '../common/CategoryIcon';
 
 interface DashboardViewProps {
@@ -64,14 +64,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const [isRecurringModalOpen, setIsRecurringModalOpen] = useState(false);
   const [autoInjectBanner, setAutoInjectBanner] = useState<{ count: number; amount: number } | null>(null);
 
-  const activeMonthStr = currentMonth === 'all' ? '2026-08' : currentMonth;
+  const activeMonthStr = currentMonth === 'all' ? getCurrentMonth() : currentMonth;
+  const prevMonthStr = getPreviousMonth(activeMonthStr);
+  const todayIso = new Date().toISOString().slice(0, 10);
 
   const loadData = () => {
     setCategories(storageService.getCategories());
     setHealthScore(storageService.calculateFinancialHealthScore());
 
-    const currentTxs = storageService.getTransactions().filter((t) => t.date.startsWith('2026-08'));
-    const prevTxs = storageService.getTransactions().filter((t) => t.date.startsWith('2026-07'));
+    const currentTxs = storageService.getTransactions().filter((t) => t.date.startsWith(activeMonthStr));
+    const prevTxs = storageService.getTransactions().filter((t) => t.date.startsWith(prevMonthStr));
     const cats = storageService.getCategories();
     const generated = InsightGenerator.generateDynamicInsights(currentTxs, prevTxs, cats);
     setInsights(generated);
@@ -86,7 +88,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   // Compute month summary
   const summary = storageService.calculateMonthSummary(activeMonthStr);
-  const prevSummary = storageService.calculateMonthSummary('2026-07');
+  const prevSummary = storageService.calculateMonthSummary(prevMonthStr);
   const momComparison = SpendingAnalyzer.compareMonths(
     summary.transactions,
     prevSummary.transactions,
@@ -94,7 +96,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   );
 
   // Compute recurring transactions summary
-  const recurringSummary = recurringService.getRecurringMonthSummary(activeMonthStr, '2026-08-28');
+  const recurringSummary = recurringService.getRecurringMonthSummary(activeMonthStr, todayIso);
 
   // Pie chart data
   const pieData = Object.entries(summary.categorySpending)
@@ -109,7 +111,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     })
     .sort((a, b) => b.value - a.value);
 
-  const recentTransactions = summary.transactions.slice(0, 5);
+  const allTxs = storageService.getTransactions();
+  const recentTransactions = [...allTxs]
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .slice(0, 5);
   const upcomingBills = recurringSummary.items
     .filter((item) => item.status !== 'paid' && item.status !== 'paused')
     .slice(0, 3);
@@ -120,7 +125,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   };
 
   const handleRunAutoInject = () => {
-    const res = recurringService.autoInjectDueTransactions('2026-08-28');
+    const res = recurringService.autoInjectDueTransactions(todayIso);
     if (res.injectedCount > 0) {
       setAutoInjectBanner({ count: res.injectedCount, amount: res.totalInjectedAmount });
       setTimeout(() => setAutoInjectBanner(null), 5000);

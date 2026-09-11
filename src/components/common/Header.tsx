@@ -4,8 +4,11 @@ import {
   Plus,
   Menu,
   Search,
+  Sun,
+  Moon,
 } from 'lucide-react';
 import { UserProfile } from '../../types';
+import { useTheme } from '../../services/theme/ThemeContext';
 
 interface HeaderProps {
   currentMonth: string;
@@ -36,6 +39,8 @@ export const Header: React.FC<HeaderProps> = ({
   onNavigate,
   onToggleMobileSidebar,
 }) => {
+  const { effectiveTheme, setTheme } = useTheme();
+
   const handleAddClick = () => {
     if (onOpenAddTransaction) {
       onOpenAddTransaction();
@@ -96,8 +101,22 @@ export const Header: React.FC<HeaderProps> = ({
         </button>
       </div>
 
-      {/* Right Controls: Clean & Neat with Quick Add Button */}
-      <div className="flex items-center shrink-0">
+      {/* Right Controls: Clean & Neat with Quick Add Button and Quick Theme Switch */}
+      <div className="flex items-center shrink-0 gap-2">
+        <button
+          type="button"
+          onClick={() => setTheme(effectiveTheme === 'dark' ? 'light' : 'dark')}
+          className="flex h-9 w-9 items-center justify-center rounded-xl border border-[#262626] bg-[#141414] text-gray-300 hover:text-white hover:bg-[#1a1a1a] transition cursor-pointer"
+          aria-label={`Toggle visual theme. Currently ${effectiveTheme} mode.`}
+          title={`Switch to ${effectiveTheme === 'dark' ? 'Light' : 'Dark'} Mode (Configure in Settings)`}
+        >
+          {effectiveTheme === 'dark' ? (
+            <Sun size={16} className="text-amber-400 hover:rotate-45 transition-transform" />
+          ) : (
+            <Moon size={16} className="text-blue-500 hover:-rotate-12 transition-transform" />
+          )}
+        </button>
+
         <button
           onClick={handleAddClick}
           className="flex h-9 items-center justify-center gap-1.5 rounded-xl bg-blue-600 px-3 sm:px-3.5 text-xs font-semibold text-white shadow-xs transition hover:bg-blue-500 cursor-pointer shrink-0"

@@ -7,6 +7,10 @@ interface TransactionsPageProps {
   currencySymbol: string;
   onOpenAddModal: (tx?: Transaction) => void;
   onOpenScanReceipt: () => void;
+  onSelectMonth?: (month: string) => void;
+  initialStartDate?: string;
+  initialEndDate?: string;
+  onClearDateRange?: () => void;
 }
 
 const TransactionsPage: React.FC<TransactionsPageProps> = (props) => {
@@ -14,3 +18,4 @@ const TransactionsPage: React.FC<TransactionsPageProps> = (props) => {
 };
 
 export default TransactionsPage;
+

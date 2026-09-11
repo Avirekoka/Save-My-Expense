@@ -3,6 +3,8 @@ import { Loader2, Sparkles, ShieldAlert } from 'lucide-react';
 import { Header } from './components/common/Header';
 import { Sidebar } from './components/common/Sidebar';
 import { Footer } from './components/common/Footer';
+import { EmailVerificationBanner } from './components/common/EmailVerificationBanner';
+import { EmailVerificationGate } from './components/common/EmailVerificationGate';
 import { PageLoadingSkeleton } from './components/common/PageLoadingSkeleton';
 import { AddTransactionModal } from './components/modals/AddTransactionModal';
 import { ReceiptScannerModal, ScannedReceiptData } from './components/modals/ReceiptScannerModal';
@@ -10,10 +12,12 @@ import { AskMoneyDialog } from './components/modals/AskMoneyDialog';
 import { BeforeYouSpendModal } from './components/modals/BeforeYouSpendModal';
 import { AuthModal } from './components/modals/AuthModal';
 import { AuthProvider, useAuth } from './services/firebase/AuthContext';
+import { ThemeProvider } from './services/theme/ThemeContext';
 import { RouterProvider, useRouter, AppRoute, ROUTE_PATHS } from './router/RouterContext';
 import { storageService, NOTIFY_EVENT } from './services/storage/storage.service';
 import { Transaction } from './types';
 import { getCurrencySymbol } from './utils/currency';
+import { getCurrentMonth } from './utils/formatters';
 import { initGlobalModalScrollListener } from './hooks/useScrollLock';
 
 // Code-split page components (lazy loaded on route request)
@@ -48,10 +52,10 @@ export const PUBLIC_ROUTES = ['landing'] as const;
 export type RouteView = (typeof RESTRICTED_ROUTES)[number] | (typeof PUBLIC_ROUTES)[number];
 
 function MainAppContent() {
-  const { user, loading, signInAsDemo } = useAuth();
+  const { user, loading, signInAsDemo, logOut } = useAuth();
   const { currentRoute, navigate } = useRouter();
   const [authModalMode, setAuthModalMode] = useState<'signin' | 'signup'>('signin');
-  const [selectedMonth, setSelectedMonth] = useState<string>('2026-08');
+  const [selectedMonth, setSelectedMonth] = useState<string>(getCurrentMonth());
   const [currencySymbol, setCurrencySymbol] = useState<string>('₹');
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
   const [accessDeniedNotice, setAccessDeniedNotice] = useState<string | null>(null);
@@ -66,8 +70,11 @@ function MainAppContent() {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
 
   // Profile data
-  const [monthlyIncome, setMonthlyIncome] = useState<number>(120000);
-  const [monthlyExpense, setMonthlyExpense] = useState<number>(72450);
+  const [monthlyIncome, setMonthlyIncome] = useState<number>(() => {
+    return storageService.isDemoUser() ? 120000 : (storageService.getUserProfile().monthlyIncome || 0);
+  });
+  const [monthlyExpense, setMonthlyExpense] = useState<number>(0);
+  const [heatmapDateRange, setHeatmapDateRange] = useState<{ start: string; end: string } | null>(null);
   const mainScrollRef = useRef<HTMLElement>(null);
 
   // Route Access Guard: redirect unauthenticated users away from restricted routes
@@ -99,12 +106,24 @@ function MainAppContent() {
     if (isMobileSidebarOpen) setIsMobileSidebarOpen(false);
   };
 
-  // Action Guard: Blocks unauthenticated users from performing actions
+  // Action Guard: Blocks unauthenticated or unconfirmed email users from performing actions
   const requireAuthForAction = (actionName: string, callback: () => void) => {
     if (!user) {
       setAccessDeniedNotice(`You must be logged in to ${actionName}.`);
       setAuthModalMode('signin');
       setIsAuthModalOpen(true);
+      return;
+    }
+    if (user.emailVerified === false) {
+      window.dispatchEvent(
+        new CustomEvent('spendai-toast', {
+          detail: {
+            type: 'warning',
+            title: 'Email Confirmation Required',
+            message: `Please verify your email address (${user.email}) to ${actionName}.`,
+          },
+        })
+      );
       return;
     }
     callback();
@@ -120,18 +139,19 @@ function MainAppContent() {
 
   const refreshFinancials = () => {
     const profile = storageService.getUserProfile();
-    setMonthlyIncome(profile.monthlyIncome || 120000);
+    const isDemo = storageService.isDemoUser();
+    setMonthlyIncome(profile.monthlyIncome || (isDemo ? 120000 : 0));
     setCurrencySymbol(profile.currencySymbol || profile.currency || '₹');
 
     const allTransactions = storageService.getTransactions();
     const monthExpenses = allTransactions
       .filter((t) => {
-        if (selectedMonth === 'all') return t.type === 'expense';
-        return t.type === 'expense' && t.date.startsWith(selectedMonth);
+        if (selectedMonth === 'all') return t.type === 'expense' || t.type === 'loan_emi';
+        return (t.type === 'expense' || t.type === 'loan_emi') && t.date.startsWith(selectedMonth);
       })
       .reduce((sum, t) => sum + t.amount, 0);
 
-    setMonthlyExpense(monthExpenses > 0 ? monthExpenses : 72450);
+    setMonthlyExpense(monthExpenses > 0 ? monthExpenses : (isDemo ? 72450 : 0));
   };
 
   // Global modal listener for scroll locking
@@ -265,7 +285,10 @@ function MainAppContent() {
 
   // RESTRICTED ROUTES: Authenticated Workspace
   return (
-    <div className="h-screen h-[100dvh] max-h-screen overflow-hidden bg-[#0a0a0a] text-[#e5e5e5] font-sans flex flex-col selection:bg-blue-600 selection:text-white">
+    <div
+      id="app-root-container"
+      className="h-screen h-[100dvh] max-h-screen overflow-hidden bg-[#0a0a0a] text-[#e5e5e5] font-sans flex flex-col selection:bg-blue-600 selection:text-white"
+    >
       {/* Top Header */}
       <Header
         currentMonth={selectedMonth}
@@ -283,6 +306,9 @@ function MainAppContent() {
         onNavigate={handleNavigate}
         onToggleMobileSidebar={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
       />
+
+      {/* Email Verification Alert Banner for Unverified Accounts */}
+      <EmailVerificationBanner />
 
       {/* Main Layout Container */}
       <div className="flex flex-1 min-h-0 h-full max-h-[calc(100dvh-4rem)] overflow-hidden">
@@ -315,84 +341,115 @@ function MainAppContent() {
         >
           <div className="max-w-7xl mx-auto w-full flex-1">
             <Suspense fallback={<PageLoadingSkeleton />}>
-              {currentRoute === 'dashboard' && (
-                <DashboardPage
-                  currentMonth={selectedMonth}
-                  currencySymbol={currencySymbol}
-                  onNavigate={handleNavigate}
-                  onOpenAddModal={() => handleOpenAdd()}
-                  onOpenBeforeSpend={handleOpenBeforeSpend}
-                  onOpenAskMoney={handleOpenAskMoney}
-                  onOpenScanReceipt={handleOpenScanReceipt}
+              {user && user.emailVerified === false && currentRoute !== 'settings' ? (
+                <EmailVerificationGate
+                  attemptedFeature={
+                    currentRoute === 'dashboard' ? 'Financial Dashboard' :
+                    currentRoute === 'transactions' ? 'Expense & Income Records' :
+                    currentRoute === 'monthwise' ? 'Monthly Breakdown' :
+                    currentRoute === 'statements' ? 'AI Statement Parser' :
+                    currentRoute === 'analytics' ? 'Analytics & Cash Flow' :
+                    currentRoute === 'budgets' ? 'Budget Planner' :
+                    currentRoute === 'goals' ? 'Savings Simulator' :
+                    currentRoute === 'insights' ? 'AI Spending Insights' :
+                    currentRoute === 'debt' ? 'Debt & EMI Planner' :
+                    'Financial Suite'
+                  }
+                  onSignOut={logOut}
                 />
-              )}
+              ) : (
+                <>
+                  {currentRoute === 'dashboard' && (
+                    <DashboardPage
+                      currentMonth={selectedMonth}
+                      currencySymbol={currencySymbol}
+                      onNavigate={handleNavigate}
+                      onOpenAddModal={() => handleOpenAdd()}
+                      onOpenBeforeSpend={handleOpenBeforeSpend}
+                      onOpenAskMoney={handleOpenAskMoney}
+                      onOpenScanReceipt={handleOpenScanReceipt}
+                    />
+                  )}
 
-              {currentRoute === 'transactions' && (
-                <TransactionsPage
-                  currentMonth={selectedMonth}
-                  currencySymbol={currencySymbol}
-                  onOpenAddModal={handleOpenAdd}
-                  onOpenScanReceipt={handleOpenScanReceipt}
-                />
-              )}
+                  {currentRoute === 'transactions' && (
+                    <TransactionsPage
+                      currentMonth={selectedMonth}
+                      currencySymbol={currencySymbol}
+                      onOpenAddModal={handleOpenAdd}
+                      onOpenScanReceipt={handleOpenScanReceipt}
+                      onSelectMonth={setSelectedMonth}
+                      initialStartDate={heatmapDateRange?.start}
+                      initialEndDate={heatmapDateRange?.end}
+                      onClearDateRange={() => setHeatmapDateRange(null)}
+                    />
+                  )}
 
-              {currentRoute === 'monthwise' && (
-                <MonthWisePage
-                  currencySymbol={currencySymbol}
-                  onNavigate={handleNavigate}
-                  onSelectMonth={(month) => {
-                    setSelectedMonth(month);
-                    handleNavigate('transactions');
-                  }}
-                  onOpenAddModal={() => handleOpenAdd()}
-                />
-              )}
+                  {currentRoute === 'monthwise' && (
+                    <MonthWisePage
+                      currencySymbol={currencySymbol}
+                      onNavigate={handleNavigate}
+                      onSelectMonth={(month) => {
+                        setSelectedMonth(month);
+                        handleNavigate('transactions');
+                      }}
+                      onOpenAddModal={() => handleOpenAdd()}
+                    />
+                  )}
 
-              {currentRoute === 'statements' && (
-                <StatementsPage
-                  currencySymbol={currencySymbol}
-                  onNavigate={handleNavigate}
-                />
-              )}
+                  {currentRoute === 'statements' && (
+                    <StatementsPage
+                      currencySymbol={currencySymbol}
+                      onNavigate={handleNavigate}
+                    />
+                  )}
 
-              {currentRoute === 'analytics' && (
-                <AnalyticsPage
-                  currentMonth={selectedMonth}
-                  currencySymbol={currencySymbol}
-                />
-              )}
+                  {currentRoute === 'analytics' && (
+                    <AnalyticsPage
+                      currentMonth={selectedMonth}
+                      currencySymbol={currencySymbol}
+                      onNavigate={handleNavigate}
+                      onOpenAddModal={handleOpenAdd}
+                      onNavigateToTransactions={(startDate, endDate) => {
+                        setHeatmapDateRange({ start: startDate, end: endDate });
+                        handleNavigate('transactions');
+                      }}
+                    />
+                  )}
 
-              {currentRoute === 'budgets' && (
-                <BudgetsPage
-                  currentMonth={selectedMonth}
-                  currencySymbol={currencySymbol}
-                />
-              )}
+                  {currentRoute === 'budgets' && (
+                    <BudgetsPage
+                      currentMonth={selectedMonth}
+                      currencySymbol={currencySymbol}
+                    />
+                  )}
 
-              {currentRoute === 'goals' && (
-                <GoalsPage currencySymbol={currencySymbol} />
-              )}
+                  {currentRoute === 'goals' && (
+                    <GoalsPage currencySymbol={currencySymbol} />
+                  )}
 
-              {currentRoute === 'insights' && (
-                <InsightsPage
-                  currentMonth={selectedMonth}
-                  currencySymbol={currencySymbol}
-                />
-              )}
+                  {currentRoute === 'insights' && (
+                    <InsightsPage
+                      currentMonth={selectedMonth}
+                      currencySymbol={currencySymbol}
+                    />
+                  )}
 
-              {currentRoute === 'debt' && (
-                <DebtPage currencySymbol={currencySymbol} />
-              )}
+                  {currentRoute === 'debt' && (
+                    <DebtPage currencySymbol={currencySymbol} />
+                  )}
 
-              {currentRoute === 'settings' && (
-                <SettingsPage
-                  currencySymbol={currencySymbol}
-                  onUpdateCurrency={setCurrencySymbol}
-                  onOpenAuthModal={() => {
-                    setAuthModalMode('signin');
-                    setIsAuthModalOpen(true);
-                  }}
-                />
+                  {currentRoute === 'settings' && (
+                    <SettingsPage
+                      currencySymbol={currencySymbol}
+                      onUpdateCurrency={setCurrencySymbol}
+                      onNavigate={handleNavigate}
+                      onOpenAuthModal={() => {
+                        setAuthModalMode('signin');
+                        setIsAuthModalOpen(true);
+                      }}
+                    />
+                  )}
+                </>
               )}
             </Suspense>
           </div>
@@ -462,7 +519,9 @@ function RootRouterApp() {
 export default function App() {
   return (
     <AuthProvider>
-      <RootRouterApp />
+      <ThemeProvider>
+        <RootRouterApp />
+      </ThemeProvider>
     </AuthProvider>
   );
 }

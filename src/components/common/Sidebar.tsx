@@ -19,8 +19,9 @@ import {
   User,
   Shield,
   Check,
+  Lock,
 } from 'lucide-react';
-import { formatCurrency, getLastThreeMonths } from '../../utils/formatters';
+import { formatCurrency, getLastThreeMonths, getCurrentMonth } from '../../utils/formatters';
 import { useAuth } from '../../services/firebase/AuthContext';
 import { storageService, NOTIFY_EVENT } from '../../services/storage/storage.service';
 import { useScrollLock } from '../../hooks/useScrollLock';
@@ -51,7 +52,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   currencySymbol,
   isMobileOpen,
   onCloseMobile,
-  currentMonth = '2026-08',
+  currentMonth = getCurrentMonth(),
   onMonthChange,
   onOpenAddTransaction,
   onOpenScanReceipt,
@@ -61,6 +62,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const { user, logOut } = useAuth();
   const { currentRoute, navigate } = useRouter();
+  const isUnverified = Boolean(user && user.emailVerified === false);
+
+  const handleProtectedAction = (actionName: string, actionFn?: () => void) => {
+    if (isUnverified) {
+      window.dispatchEvent(
+        new CustomEvent('spendai-toast', {
+          detail: {
+            type: 'warning',
+            title: 'Email Confirmation Required',
+            message: `Please verify your email (${user?.email}) to use ${actionName}.`,
+          },
+        })
+      );
+      return;
+    }
+    actionFn?.();
+  };
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, badge: null },
@@ -77,7 +95,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const savings = Math.max(0, monthlyIncome - monthlyExpense);
   const savingsRate = monthlyIncome > 0 ? (savings / monthlyIncome) * 100 : 0;
-  const recentMonths = getLastThreeMonths(currentMonth === 'all' ? '2026-08' : currentMonth);
+  const recentMonths = getLastThreeMonths(currentMonth === 'all' ? getCurrentMonth() : currentMonth);
 
   // Reactive Profile & Daily Spending Alert info
   const [profile, setProfile] = useState(storageService.getUserProfile());
@@ -176,7 +194,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <button
                 onClick={() => {
                   onCloseMobile();
-                  onOpenAddTransaction();
+                  handleProtectedAction('add expenses', onOpenAddTransaction);
                 }}
                 className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 py-2 px-3 text-xs font-bold text-white shadow-xs transition hover:bg-blue-500 cursor-pointer"
               >
@@ -191,7 +209,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <button
                   onClick={() => {
                     onCloseMobile();
-                    onOpenScanReceipt();
+                    handleProtectedAction('scan receipts', onOpenScanReceipt);
                   }}
                   className="flex flex-col items-center justify-center gap-1 rounded-lg border border-[#262626] bg-[#171717] py-2 px-1 text-center text-gray-300 hover:border-blue-500/50 hover:bg-[#1f1f1f] hover:text-white transition cursor-pointer"
                   title="Scan physical receipt with Camera AI"
@@ -205,7 +223,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <button
                   onClick={() => {
                     onCloseMobile();
-                    onOpenBeforeSpend();
+                    handleProtectedAction('use spend advisor', onOpenBeforeSpend);
                   }}
                   className="flex flex-col items-center justify-center gap-1 rounded-lg border border-[#262626] bg-[#171717] py-2 px-1 text-center text-gray-300 hover:border-amber-500/50 hover:bg-[#1f1f1f] hover:text-white transition cursor-pointer"
                   title="Before You Spend Decision Advisor"
@@ -219,7 +237,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <button
                   onClick={() => {
                     onCloseMobile();
-                    onOpenAskMoney();
+                    handleProtectedAction('ask AI advisor', onOpenAskMoney);
                   }}
                   className="flex flex-col items-center justify-center gap-1 rounded-lg border border-[#262626] bg-[#171717] py-2 px-1 text-center text-gray-300 hover:border-purple-500/50 hover:bg-[#1f1f1f] hover:text-white transition cursor-pointer"
                   title="Ask AI about your money"
@@ -323,6 +341,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div className="grid grid-cols-2 gap-1.5 pt-1">
               {recentMonths.map((m) => {
                 const isSelected = currentMonth === m.value;
+                const isCurrent = m.value === getCurrentMonth();
                 return (
                   <button
                     key={m.value}
@@ -333,7 +352,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         : 'bg-[#171717] text-gray-400 hover:text-white border border-[#262626]'
                     }`}
                   >
-                    <span className="truncate">{m.label.split(' ')[0]}</span>
+                    <span className="truncate flex items-center gap-1">
+                      <span>{m.label.split(' ')[0]}</span>
+                      {isCurrent && (
+                        <span className="text-[9px] font-medium text-blue-400">
+                          (Now)
+                        </span>
+                      )}
+                    </span>
                     {isSelected && <Check size={12} className="text-blue-400 shrink-0" />}
                   </button>
                 );
@@ -362,6 +388,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               {navItems.map((item) => {
                 const Icon = item.icon;
                 const isActive = (currentRoute === item.id) || (activeView === item.id);
+                const isItemLocked = isUnverified && item.id !== 'settings';
                 return (
                   <button
                     key={item.id}
@@ -384,7 +411,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       <span>{item.label}</span>
                     </div>
 
-                    {item.badge && (
+                    {isItemLocked ? (
+                      <span className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[9px] font-bold bg-amber-500/10 text-amber-300 border border-amber-500/20">
+                        <Lock size={10} className="shrink-0" />
+                        <span>Locked</span>
+                      </span>
+                    ) : item.badge ? (
                       <span
                         className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold ${
                           isActive
@@ -396,7 +428,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       >
                         {item.badge}
                       </span>
-                    )}
+                    ) : null}
                   </button>
                 );
               })}
@@ -431,6 +463,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <div className="text-xs font-bold text-white truncate">
                     {profile?.name || user?.displayName || 'Personal Profile'}
                   </div>
+                  {isUnverified ? (
+                    <div className="text-[10px] text-amber-400 font-medium flex items-center gap-1 truncate">
+                      <Lock size={10} className="shrink-0" />
+                      <span>Email Unverified</span>
+                    </div>
+                  ) : (
+                    <div className="text-[10px] text-gray-500 truncate">
+                      {user?.email || 'Logged in'}
+                    </div>
+                  )}
                 </div>
               </div>
 

@@ -7,6 +7,9 @@ export class InsightGenerator {
     prevMonthTxs: Transaction[],
     categories: Category[]
   ): AIInsight[] {
+    if (currentMonthTxs.length === 0 && prevMonthTxs.length === 0) {
+      return [];
+    }
     const insights: AIInsight[] = [];
     const dateStr = new Date().toISOString().slice(0, 10);
 

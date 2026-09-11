@@ -35,6 +35,7 @@ import {
   getDocs,
   writeBatch,
   serverTimestamp,
+  onSnapshot,
 } from '../firebase/firebase';
 
 const STORAGE_KEYS = {
@@ -219,33 +220,60 @@ class StorageService {
         const existingProfile = localStorage.getItem(userProfileKey);
         if (!existingProfile) {
           const initialProfile: UserProfile = {
-            ...SEED_PROFILE,
+            id: user.uid,
             name: user.displayName || user.email?.split('@')[0] || 'Personal Account',
             email: user.email || '',
             photoURL: user.photoURL || undefined,
             currency: '₹',
             currencySymbol: '₹',
+            monthlyIncome: 0,
+            primaryGoal: '',
+            onboardingCompleted: false,
+            theme: 'system',
+            dailySpendingAlert: {
+              enabled: false,
+              threshold: 2000,
+              nudgeTone: 'gentle',
+            },
+            aiPreferences: {
+              autoCategorize: true,
+              alertThreshold: 2000,
+              anomalyDetection: true,
+            },
           };
           localStorage.setItem(userProfileKey, JSON.stringify(initialProfile));
         }
 
-        // Migrate guest or legacy transactions to this authenticated user if first time
+        // Initialize empty containers if this authenticated user is fresh - NEVER SEED DUMMY DATA FOR AUTHENTICATED USERS
         const userTxKey = this.getKey('TRANSACTIONS');
         const existingUserTx = localStorage.getItem(userTxKey);
         if (!existingUserTx) {
-          const guestTx =
-            localStorage.getItem('ais_guest_ais_spend_transactions_v1') ||
-            localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
-          if (guestTx) {
-            try {
-              const parsed = JSON.parse(guestTx);
-              if (Array.isArray(parsed) && parsed.length > 0) {
-                localStorage.setItem(userTxKey, JSON.stringify(parsed));
-              }
-            } catch (_) {}
-          } else {
-            localStorage.setItem(userTxKey, JSON.stringify(SEED_TRANSACTIONS));
-          }
+          localStorage.setItem(userTxKey, JSON.stringify([]));
+        }
+
+        const userBudgetKey = this.getKey('BUDGETS');
+        if (!localStorage.getItem(userBudgetKey)) {
+          localStorage.setItem(userBudgetKey, JSON.stringify([]));
+        }
+
+        const userGoalKey = this.getKey('GOALS');
+        if (!localStorage.getItem(userGoalKey)) {
+          localStorage.setItem(userGoalKey, JSON.stringify([]));
+        }
+
+        const userSubKey = this.getKey('SUBSCRIPTIONS');
+        if (!localStorage.getItem(userSubKey)) {
+          localStorage.setItem(userSubKey, JSON.stringify([]));
+        }
+
+        const userLoanKey = this.getKey('EMI_LOANS');
+        if (!localStorage.getItem(userLoanKey)) {
+          localStorage.setItem(userLoanKey, JSON.stringify([]));
+        }
+
+        const userRecKey = this.getKey('RECURRING_SCHEDULES');
+        if (!localStorage.getItem(userRecKey)) {
+          localStorage.setItem(userRecKey, JSON.stringify([]));
         }
 
         // Trigger Firestore synchronization only on fresh login or user switch
@@ -404,6 +432,7 @@ class StorageService {
           email: parsed.email || this.currentUserEmail || (this.isDemoUser() ? SEED_PROFILE.email : ''),
           currency: canonicalSymbol,
           currencySymbol: canonicalSymbol,
+          theme: parsed.theme || SEED_PROFILE.theme || 'system',
         };
       }
     } catch (e) {
@@ -524,27 +553,22 @@ class StorageService {
       const data = localStorage.getItem(this.getKey('TRANSACTIONS'));
       if (data) {
         const parsed = JSON.parse(data);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+        if (Array.isArray(parsed)) {
+          // Never return seed transactions for authenticated users
+          return parsed.filter(
+            (tx) =>
+              tx.userId !== 'usr_main_demo' &&
+              !tx.id.startsWith('tx_sep_') &&
+              !tx.id.startsWith('tx_aug_') &&
+              !tx.id.startsWith('tx_jul_')
+          );
         }
       }
     } catch (e) {
       console.warn('Failed to parse transactions from storage', e);
     }
-    // Check if guest has stored transactions to inherit
-    const guestStored = localStorage.getItem('ais_guest_ais_spend_transactions_v1');
-    if (guestStored) {
-      try {
-        const parsed = JSON.parse(guestStored);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          this.saveAllTransactions(parsed);
-          return parsed;
-        }
-      } catch (_) {}
-    }
-    // Baseline seed data so ledger is never blank
-    this.saveAllTransactions(SEED_TRANSACTIONS);
-    return SEED_TRANSACTIONS;
+    // Genuine authenticated user has no dummy data - return empty array
+    return [];
   }
 
   saveTransaction(tx: Transaction): void {
@@ -693,12 +717,16 @@ class StorageService {
     }
     try {
       const data = localStorage.getItem(this.getKey('BUDGETS'));
-      if (data) return JSON.parse(data);
+      if (data) {
+        const parsed = JSON.parse(data);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((b) => !['b_food', 'b_shopping', 'b_ent', 'b_bills', 'b_transport'].includes(b.id));
+        }
+      }
     } catch (e) {
       console.warn('Failed to parse budgets', e);
     }
-    this.saveBudgets(SEED_BUDGETS);
-    return SEED_BUDGETS;
+    return [];
   }
 
   saveBudget(budget: Budget): void {
@@ -752,12 +780,16 @@ class StorageService {
     }
     try {
       const data = localStorage.getItem(this.getKey('GOALS'));
-      if (data) return JSON.parse(data);
+      if (data) {
+        const parsed = JSON.parse(data);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((g) => !['goal_01', 'goal_02', 'goal_03'].includes(g.id));
+        }
+      }
     } catch (e) {
       console.warn('Failed to parse goals', e);
     }
-    this.saveGoals(SEED_GOALS);
-    return SEED_GOALS;
+    return [];
   }
 
   saveGoal(goal: FinancialGoal): void {
@@ -824,12 +856,16 @@ class StorageService {
     }
     try {
       const data = localStorage.getItem(this.getKey('SUBSCRIPTIONS'));
-      if (data) return JSON.parse(data);
+      if (data) {
+        const parsed = JSON.parse(data);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((s) => !['sub_01', 'sub_02', 'sub_03', 'sub_04'].includes(s.id));
+        }
+      }
     } catch (e) {
       console.warn('Failed to parse subscriptions', e);
     }
-    this.saveSubscriptions(SEED_SUBSCRIPTIONS);
-    return SEED_SUBSCRIPTIONS;
+    return [];
   }
 
   saveSubscription(sub: Subscription): void {
@@ -878,12 +914,16 @@ class StorageService {
     }
     try {
       const data = localStorage.getItem(this.getKey('EMI_LOANS'));
-      if (data) return JSON.parse(data);
+      if (data) {
+        const parsed = JSON.parse(data);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((l) => !['loan_01', 'loan_02'].includes(l.id));
+        }
+      }
     } catch (e) {
       console.warn('Failed to parse EMI loans', e);
     }
-    this.saveEMILoans(SEED_EMI_LOANS);
-    return SEED_EMI_LOANS;
+    return [];
   }
 
   saveEMILoan(loan: EMILoan): void {
@@ -956,12 +996,16 @@ class StorageService {
     }
     try {
       const data = localStorage.getItem(this.getKey('RECURRING_SCHEDULES'));
-      if (data) return JSON.parse(data);
+      if (data) {
+        const parsed = JSON.parse(data);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((s) => !['rec_01', 'rec_02', 'rec_03'].includes(s.id));
+        }
+      }
     } catch (e) {
       console.warn('Failed to parse recurring schedules', e);
     }
-    this.saveRecurringSchedules(SEED_RECURRING_SCHEDULES);
-    return SEED_RECURRING_SCHEDULES;
+    return [];
   }
 
   saveRecurringSchedule(schedule: RecurringSchedule): void {
@@ -1033,11 +1077,16 @@ class StorageService {
     }
     try {
       const data = localStorage.getItem(this.getKey('NOTIFICATIONS'));
-      if (data) return JSON.parse(data);
+      if (data) {
+        const parsed = JSON.parse(data);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((n) => !['n_01', 'n_02', 'n_03', 'n_04'].includes(n.id));
+        }
+      }
     } catch (e) {
       console.warn('Failed to parse notifications', e);
     }
-    return SEED_NOTIFICATIONS;
+    return [];
   }
 
   markNotificationRead(id: string): void {
@@ -1146,17 +1195,28 @@ class StorageService {
       if (!txSnap.empty) {
         const remoteTxs: Transaction[] = [];
         txSnap.forEach((docSnap) => {
-          remoteTxs.push(docSnap.data() as Transaction);
+          const t = docSnap.data() as Transaction;
+          if (
+            t &&
+            t.userId !== 'usr_main_demo' &&
+            !t.id.startsWith('tx_sep_') &&
+            !t.id.startsWith('tx_aug_') &&
+            !t.id.startsWith('tx_jul_')
+          ) {
+            remoteTxs.push(t);
+          }
         });
         remoteTxs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
         localStorage.setItem(this.getKey('TRANSACTIONS'), JSON.stringify(remoteTxs));
         triggerUpdate();
       } else {
-        // First-time genuine user: populate Firestore with user's baseline ledger
-        const existingLocal = this.getTransactions();
-        const txsToSeed = existingLocal.length > 0 ? existingLocal : SEED_TRANSACTIONS;
-        await this.batchSaveTransactionsToFirestore(txsToSeed);
+        // Fresh genuine user with no transactions yet: keep local storage clean and empty
+        localStorage.setItem(this.getKey('TRANSACTIONS'), JSON.stringify([]));
+        triggerUpdate();
       }
+
+      // Attach real-time Firestore listener for live WhatsApp message & multi-device sync
+      this.listenToTransactions(userId);
 
       // 2. Budgets Collection
       const budgetCol = collection(db, 'users', userId, 'budgets');
@@ -1164,12 +1224,16 @@ class StorageService {
       if (!budgetSnap.empty) {
         const remoteBudgets: Budget[] = [];
         budgetSnap.forEach((docSnap) => {
-          remoteBudgets.push(docSnap.data() as Budget);
+          const b = docSnap.data() as Budget;
+          if (b && !['b_food', 'b_shopping', 'b_ent', 'b_bills', 'b_transport'].includes(b.id)) {
+            remoteBudgets.push(b);
+          }
         });
         localStorage.setItem(this.getKey('BUDGETS'), JSON.stringify(remoteBudgets));
         triggerUpdate();
       } else {
-        await this.batchSaveBudgetsToFirestore(SEED_BUDGETS);
+        localStorage.setItem(this.getKey('BUDGETS'), JSON.stringify([]));
+        triggerUpdate();
       }
 
       // 3. Goals Collection
@@ -1178,12 +1242,16 @@ class StorageService {
       if (!goalsSnap.empty) {
         const remoteGoals: FinancialGoal[] = [];
         goalsSnap.forEach((docSnap) => {
-          remoteGoals.push(docSnap.data() as FinancialGoal);
+          const g = docSnap.data() as FinancialGoal;
+          if (g && !['goal_01', 'goal_02', 'goal_03'].includes(g.id)) {
+            remoteGoals.push(g);
+          }
         });
         localStorage.setItem(this.getKey('GOALS'), JSON.stringify(remoteGoals));
         triggerUpdate();
       } else {
-        await this.batchSaveGoalsToFirestore(SEED_GOALS);
+        localStorage.setItem(this.getKey('GOALS'), JSON.stringify([]));
+        triggerUpdate();
       }
 
       // 4. Profile Document
@@ -1214,6 +1282,44 @@ class StorageService {
       }
     } catch (err) {
       console.warn('Firestore cloud sync notice:', err);
+    }
+  }
+
+  private unsubscribeTransactions: (() => void) | null = null;
+
+  listenToTransactions(userId: string): void {
+    if (!userId || this.isDemoUser()) return;
+    if (this.unsubscribeTransactions) {
+      this.unsubscribeTransactions();
+      this.unsubscribeTransactions = null;
+    }
+    try {
+      const txCol = collection(db, 'users', userId, 'transactions');
+      this.unsubscribeTransactions = onSnapshot(
+        txCol,
+        (snap) => {
+          if (!snap.empty) {
+            const remoteTxs: Transaction[] = [];
+            snap.forEach((docSnap) => {
+              remoteTxs.push(docSnap.data() as Transaction);
+            });
+            remoteTxs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+            localStorage.setItem(this.getKey('TRANSACTIONS'), JSON.stringify(remoteTxs));
+            triggerUpdate();
+          }
+        },
+        (err) => {
+          console.warn('Real-time transactions subscription notice:', err);
+        }
+      );
+    } catch (e) {
+      console.warn('Failed to start transactions real-time listener:', e);
+    }
+  }
+
+  async reloadFromCloud(): Promise<void> {
+    if (this.currentUserId && !this.isDemoUser()) {
+      await this.syncGenuineUserWithFirestore(this.currentUserId);
     }
   }
 
@@ -1486,7 +1592,7 @@ class StorageService {
   } {
     const today = new Date().toISOString().slice(0, 10);
     const todayResult = this.getDailySpending(today);
-    if (todayResult.count > 0) {
+    if (todayResult.count > 0 || !this.isDemoUser()) {
       return {
         date: today,
         total: todayResult.total,
@@ -1637,8 +1743,23 @@ class StorageService {
   }
 
   calculateFinancialHealthScore(): FinancialHealthScore {
-    const aug = this.calculateMonthSummary('2026-08');
-    const jul = this.calculateMonthSummary('2026-07');
+    const allTxs = this.getTransactions();
+    if (!this.isDemoUser() && allTxs.length === 0) {
+      return {
+        score: 0,
+        rating: 'Fair',
+        summary: 'Add your first income or expense to calculate your financial health score.',
+        factors: [],
+        keyStrengths: [],
+        areasToImprove: ['Add your first transactions to compute health metrics.'],
+      };
+    }
+
+    const currentMonthStr = new Date().toISOString().slice(0, 7);
+    let activeSummary = this.calculateMonthSummary(currentMonthStr);
+    if (this.isDemoUser() && activeSummary.transactions.length === 0) {
+      activeSummary = this.calculateMonthSummary('2026-08');
+    }
     const goals = this.getGoals();
     const subs = this.getSubscriptions();
     const emiLoans = this.getEMILoans();
@@ -1647,7 +1768,7 @@ class StorageService {
     const factors: HealthScoreFactor[] = [];
 
     // 1. Savings Rate (Max 25 pts)
-    const savingsRate = aug.savingsRate;
+    const savingsRate = activeSummary.savingsRate;
     let savingsScore = 0;
     if (savingsRate >= 35) savingsScore = 25;
     else if (savingsRate >= 20) savingsScore = 18;
@@ -1665,7 +1786,7 @@ class StorageService {
     // 2. Budget Adherence (Max 25 pts)
     let budgetOverruns = 0;
     for (const b of budgets) {
-      const spent = aug.categorySpending[b.categoryId] || 0;
+      const spent = activeSummary.categorySpending[b.categoryId] || 0;
       if (spent > b.monthlyLimit) budgetOverruns++;
     }
     const budgetScore = budgetOverruns === 0 ? 25 : budgetOverruns === 1 ? 16 : 8;
@@ -1684,7 +1805,7 @@ class StorageService {
     const totalSubsCost = subs
       .filter((s) => s.status === 'active')
       .reduce((sum, s) => sum + s.amount, 0);
-    const subRatio = aug.totalIncome > 0 ? (totalSubsCost / aug.totalIncome) * 100 : 0;
+    const subRatio = activeSummary.totalIncome > 0 ? (totalSubsCost / activeSummary.totalIncome) * 100 : 0;
     const recurringScore = subRatio < 5 ? 20 : subRatio < 10 ? 15 : 8;
     factors.push({
       name: 'Fixed & Recurring Ratio',
@@ -1699,7 +1820,7 @@ class StorageService {
       (g) => (g?.name || '').toLowerCase().includes('emergency') || (g as any)?.category === 'Safety'
     );
     const emergencyCurrent = emergencyGoal ? emergencyGoal.currentAmount : 0;
-    const monthlyBurn = aug.totalExpenses || 50000;
+    const monthlyBurn = activeSummary.totalExpenses || 50000;
     const monthsCoverage = emergencyCurrent / (monthlyBurn || 1);
     const emergencyScore = monthsCoverage >= 3 ? 20 : monthsCoverage >= 1.5 ? 14 : 6;
 
@@ -1713,7 +1834,7 @@ class StorageService {
 
     // 5. Debt Burden / EMI Ratio (Max 10 pts)
     const totalEmi = emiLoans.reduce((sum, l) => sum + l.emiAmount, 0);
-    const emiRatio = aug.totalIncome > 0 ? (totalEmi / aug.totalIncome) * 100 : 0;
+    const emiRatio = activeSummary.totalIncome > 0 ? (totalEmi / activeSummary.totalIncome) * 100 : 0;
     const debtScore = emiRatio < 20 ? 10 : emiRatio < 40 ? 6 : 2;
     factors.push({
       name: 'Debt & EMI Burden',
@@ -1800,15 +1921,27 @@ class StorageService {
       'Tags',
       'Notes',
     ];
+
+    // CSV Formula Injection (DDE) Sanitizer
+    const sanitizeCell = (val: string | number | undefined | null): string => {
+      if (val === null || val === undefined) return '""';
+      const str = String(val).replace(/"/g, '""');
+      // Neutralize formula characters (=, +, -, @, tab, CR)
+      if (/^[=+\-@\t\r]/.test(str)) {
+        return `"'${str}"`;
+      }
+      return `"${str}"`;
+    };
+
     const rows = txs.map((t) => [
       t.date,
-      `"${t.merchant.replace(/"/g, '""')}"`,
-      t.amount,
-      t.type,
-      t.categoryId,
-      t.paymentMethod,
-      `"${(t.tags || []).join(';')}"`,
-      `"${(t.notes || '').replace(/"/g, '""')}"`,
+      sanitizeCell(t.merchant),
+      typeof t.amount === 'number' && !isNaN(t.amount) ? t.amount : 0,
+      sanitizeCell(t.type),
+      sanitizeCell(t.categoryId),
+      sanitizeCell(t.paymentMethod),
+      sanitizeCell((t.tags || []).join(';')),
+      sanitizeCell(t.notes || ''),
     ]);
     return [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
   }

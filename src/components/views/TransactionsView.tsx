@@ -18,10 +18,11 @@ import {
   RotateCcw,
   CheckCircle2,
   Camera,
+  CalendarRange,
 } from 'lucide-react';
 import { Transaction, Category, TransactionType, PaymentMethod } from '../../types';
 import { storageService, NOTIFY_EVENT } from '../../services/storage/storage.service';
-import { formatCurrency, formatDate, getMonthName } from '../../utils/formatters';
+import { formatCurrency, formatDate, getMonthName, getCurrentMonth, getLastThreeMonths } from '../../utils/formatters';
 import { CategoryIcon } from '../common/CategoryIcon';
 import { DeleteConfirmModal } from '../modals/DeleteConfirmModal';
 import { BulkDeleteModal } from '../modals/BulkDeleteModal';
@@ -32,6 +33,10 @@ interface TransactionsViewProps {
   currencySymbol: string;
   onOpenAddModal: (tx?: Transaction) => void;
   onOpenScanReceipt?: () => void;
+  onSelectMonth?: (month: string) => void;
+  initialStartDate?: string;
+  initialEndDate?: string;
+  onClearDateRange?: () => void;
 }
 
 export const TransactionsView: React.FC<TransactionsViewProps> = ({
@@ -39,6 +44,10 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
   currencySymbol,
   onOpenAddModal,
   onOpenScanReceipt,
+  onSelectMonth,
+  initialStartDate,
+  initialEndDate,
+  onClearDateRange,
 }) => {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -56,16 +65,25 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
   const [importNotification, setImportNotification] = useState<string | null>(null);
 
   // Date Range state
-  const [startDate, setStartDate] = useState<string>('');
-  const [endDate, setEndDate] = useState<string>('');
-  const [datePreset, setDatePreset] = useState<string>('all');
+  const [startDate, setStartDate] = useState<string>(initialStartDate || '');
+  const [endDate, setEndDate] = useState<string>(initialEndDate || initialStartDate || '');
+  const [datePreset, setDatePreset] = useState<string>(initialStartDate ? 'custom' : 'month');
+
+  // Respond to changes in initialStartDate/initialEndDate (e.g. from Heatmap navigation)
+  useEffect(() => {
+    if (initialStartDate) {
+      setStartDate(initialStartDate);
+      setEndDate(initialEndDate || initialStartDate);
+      setDatePreset('custom');
+    }
+  }, [initialStartDate, initialEndDate]);
 
   const handleSetPreset = (preset: string) => {
     setDatePreset(preset);
     const today = new Date();
     const todayStr = today.toISOString().slice(0, 10);
 
-    if (preset === 'all') {
+    if (preset === 'all' || preset === 'month') {
       setStartDate('');
       setEndDate('');
     } else if (preset === '30d') {
@@ -95,6 +113,11 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
     return () => window.removeEventListener(NOTIFY_EVENT, loadData);
   }, []);
 
+  const otherMonthsCount = useMemo(() => {
+    if (currentMonth === 'all') return 0;
+    return transactions.filter((t) => !t.date.startsWith(currentMonth)).length;
+  }, [transactions, currentMonth]);
+
   const filteredTransactions = useMemo(() => {
     return transactions
       .filter((tx) => {
@@ -106,8 +129,8 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
           return false;
         }
 
-        // If no explicit date range, fall back to currentMonth unless it's 'all'
-        if (!startDate && !endDate && currentMonth !== 'all' && !tx.date.startsWith(currentMonth)) {
+        // Only restrict to currentMonth if the user explicitly chooses the Month preset
+        if (datePreset === 'month' && currentMonth !== 'all' && !tx.date.startsWith(currentMonth)) {
           return false;
         }
 
@@ -155,6 +178,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
   }, [
     transactions,
     currentMonth,
+    datePreset,
     startDate,
     endDate,
     searchQuery,
@@ -290,6 +314,40 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
             className="text-gray-400 hover:text-white font-bold"
           >
             ✕
+          </button>
+        </div>
+      )}
+
+      {/* Date Range Filter Banner from Heatmap or Custom Selection */}
+      {startDate && (
+        <div className="flex items-center justify-between rounded-xl bg-blue-500/10 border border-blue-500/30 p-3 text-xs text-blue-300">
+          <div className="flex items-center gap-2">
+            <CalendarRange size={16} className="text-blue-400 shrink-0" />
+            <span>
+              Filtered Date Range:{' '}
+              <strong className="text-white font-bold">{formatDate(startDate)}</strong>
+              {endDate && endDate !== startDate && (
+                <>
+                  {' '}to <strong className="text-white font-bold">{formatDate(endDate)}</strong>
+                </>
+              )}
+              {initialStartDate && (
+                <span className="ml-2 rounded-sm bg-blue-600/30 px-1.5 py-0.5 text-[10px] text-blue-200">
+                  from Heatmap
+                </span>
+              )}
+            </span>
+          </div>
+          <button
+            onClick={() => {
+              setStartDate('');
+              setEndDate('');
+              setDatePreset('month');
+              if (onClearDateRange) onClearDateRange();
+            }}
+            className="text-xs text-blue-400 hover:text-white font-semibold underline ml-2 cursor-pointer"
+          >
+            Show full month
           </button>
         </div>
       )}
@@ -473,6 +531,10 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
             {/* Presets */}
             <div className="flex flex-wrap items-center gap-1">
               {[
+                {
+                  id: 'month',
+                  label: currentMonth !== 'all' ? `${getMonthName(currentMonth)} (Current)` : 'Current Month',
+                },
                 { id: 'all', label: 'All Time' },
                 { id: '30d', label: 'Last 30D' },
                 { id: '90d', label: 'Last 90D' },
@@ -482,8 +544,8 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
                   key={p.id}
                   onClick={() => handleSetPreset(p.id)}
                   className={`rounded-md px-2 py-1 text-[11px] font-semibold transition cursor-pointer ${
-                    datePreset === p.id && (!startDate || p.id !== 'all')
-                      ? 'bg-blue-600/20 text-blue-400 border border-blue-500/40'
+                    datePreset === p.id && !startDate && !endDate
+                      ? 'bg-blue-600 text-white shadow-xs font-bold'
                       : 'bg-[#181818] text-gray-400 hover:text-white border border-[#262626]'
                   }`}
                 >
@@ -491,6 +553,41 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
                 </button>
               ))}
             </div>
+
+            {/* Quick Month Dropdown Switcher */}
+            {onSelectMonth && (
+              <div className="flex items-center gap-1.5 pl-1 sm:border-l sm:border-[#262626]">
+                <span className="text-[11px] text-gray-400 hidden sm:inline">Month:</span>
+                <select
+                  value={currentMonth}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    onSelectMonth(val);
+                    if (val === 'all') {
+                      setDatePreset('all');
+                    } else {
+                      setDatePreset('month');
+                    }
+                    setStartDate('');
+                    setEndDate('');
+                  }}
+                  className="h-7 rounded-md border border-[#262626] bg-[#141414] px-2 text-[11px] font-medium text-gray-200 focus:border-blue-500 focus:outline-hidden cursor-pointer"
+                  title="Select Active Month Filter"
+                >
+                  <option value={getCurrentMonth()}>
+                    {getMonthName(getCurrentMonth())} (Current)
+                  </option>
+                  {getLastThreeMonths(currentMonth)
+                    .filter((m) => m.value !== getCurrentMonth())
+                    .map((m) => (
+                      <option key={m.value} value={m.value}>
+                        {m.label}
+                      </option>
+                    ))}
+                  <option value="all">All Months</option>
+                </select>
+              </div>
+            )}
           </div>
 
           {/* Date Picker inputs */}
@@ -536,6 +633,24 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
             )}
           </div>
         </div>
+
+        {/* Notice if user is viewing Month view but has transactions in other months */}
+        {otherMonthsCount > 0 && datePreset === 'month' && (
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 rounded-lg bg-blue-950/30 border border-blue-500/20 px-3 py-2 text-xs text-blue-300">
+            <div className="flex items-center gap-2">
+              <Sparkles size={14} className="text-blue-400 shrink-0" />
+              <span>
+                Filtering by <strong>{getMonthName(currentMonth)}</strong> ({filteredTransactions.length} records). You have <strong>{otherMonthsCount} transaction(s)</strong> in other months (e.g. recent WhatsApp entries).
+              </span>
+            </div>
+            <button
+              onClick={() => handleSetPreset('all')}
+              className="text-xs font-bold text-white bg-blue-600/30 hover:bg-blue-600/50 border border-blue-500/30 px-2.5 py-1 rounded cursor-pointer shrink-0 transition"
+            >
+              Show All Time
+            </button>
+          </div>
+        )}
 
         {/* Dropdowns row */}
         <div className="flex flex-wrap items-center gap-2.5 pt-1">

@@ -1,17 +1,145 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Users can read and write their own data
-    match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
 
+    // Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Schema Validation Helpers
+    function isValidUserProfile(data) {
+      return data is map &&
+        (!('name' in data) || (data.name is string && data.name.size() <= 150)) &&
+        (!('email' in data) || (data.email is string && data.email.size() <= 200)) &&
+        (!('monthlyIncome' in data) || (data.monthlyIncome is number && data.monthlyIncome >= 0)) &&
+        (!('monthlySavingsTarget' in data) || (data.monthlySavingsTarget is number && data.monthlySavingsTarget >= 0));
+    }
+
+    function isValidTransaction(data) {
+      return data is map &&
+        data.amount is number && data.amount > 0 && data.amount <= 1000000000 &&
+        data.date is string && data.date.size() == 10 &&
+        data.merchant is string && data.merchant.size() >= 1 && data.merchant.size() <= 200 &&
+        data.categoryId is string && data.categoryId.size() <= 60 &&
+        (!('paymentMethod' in data) || (data.paymentMethod is string && data.paymentMethod.size() <= 60)) &&
+        (!('notes' in data) || (data.notes is string && data.notes.size() <= 2000));
+    }
+
+    function isValidBudget(data) {
+      return data is map &&
+        data.categoryId is string && data.categoryId.size() <= 60 &&
+        data.monthlyLimit is number && data.monthlyLimit >= 0 && data.monthlyLimit <= 1000000000;
+    }
+
+    function isValidGoal(data) {
+      return data is map &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 200 &&
+        data.targetAmount is number && data.targetAmount > 0 && data.targetAmount <= 1000000000 &&
+        data.currentAmount is number && data.currentAmount >= 0;
+    }
+
+    function isValidWhatsAppMessage(data) {
+      return data is map &&
+        data.id is string && data.id.size() <= 128 &&
+        data.status is string && (data.status in ['received', 'processing', 'processed', 'failed', 'duplicate']);
+    }
+
+    function isValidWhatsAppUser(data) {
+      return data is map &&
+        data.phone is string && data.phone.size() >= 6 && data.phone.size() <= 30 &&
+        data.userId is string && data.userId.size() <= 128;
+    }
+
+    // 1. User Profile and Private Subcollections
+    match /users/{userId} {
+      // PII Protection: Only the authenticated user can read or write their own profile
+      allow get: if isOwner(userId);
+      allow list: if isOwner(userId);
+      allow create, update: if isOwner(userId) && isValidUserProfile(incoming());
+      allow delete: if isOwner(userId);
+
+      // User Financial Ledger Transactions
+      match /transactions/{transactionId} {
+        // Query Trust: Client can only query their own transactions; no public reads
+        allow get: if isOwner(userId);
+        allow list: if isOwner(userId);
+        allow create: if (isOwner(userId) && isValidTransaction(incoming())) ||
+                         (incoming().source == 'whatsapp' && isValidTransaction(incoming()));
+        allow update: if isOwner(userId) && isValidTransaction(incoming());
+        allow delete: if isOwner(userId);
+      }
+
+      // Budgets
+      match /budgets/{budgetId} {
+        allow get, list: if isOwner(userId);
+        allow create, update: if isOwner(userId) && isValidBudget(incoming());
+        allow delete: if isOwner(userId);
+      }
+
+      // Goals
+      match /goals/{goalId} {
+        allow get, list: if isOwner(userId);
+        allow create, update: if isOwner(userId) && isValidGoal(incoming());
+        allow delete: if isOwner(userId);
+      }
+
+      // User Profile Sub-documents (e.g. /profile/main)
+      match /profile/{profileId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      // Any other user subcollection
       match /{document=**} {
-        allow read, write: if request.auth != null && request.auth.uid == userId;
+        allow read, write: if isOwner(userId);
       }
     }
 
+    // Root transactions collection fallback (if user references transactions globally)
     match /transactions/{transactionId} {
-      allow read, write: if request.auth != null && (resource == null || resource.data.userId == request.auth.uid) && (request.resource == null || request.resource.data.userId == request.auth.uid);
+      allow get: if isSignedIn() && (resource.data.userId == request.auth.uid);
+      allow list: if isSignedIn() && (resource.data.userId == request.auth.uid);
+      allow create: if (isSignedIn() && incoming().userId == request.auth.uid && isValidTransaction(incoming())) ||
+                       (incoming().source == 'whatsapp' && isValidTransaction(incoming()));
+      allow update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // WhatsApp Business Cloud API incoming messages and deduplication store
+    // NEVER publicly readable by client browsers to prevent data exfiltration
+    match /whatsapp_messages/{messageId} {
+      allow read: if false;
+      allow create, update: if isValidWhatsAppMessage(incoming());
+      allow delete: if false;
+    }
+
+    // WhatsApp phone-to-user directory
+    // NEVER publicly readable to protect user phone privacy
+    match /whatsapp_users/{phone} {
+      allow read: if false;
+      allow create, update: if isValidWhatsAppUser(incoming());
+      allow delete: if false;
     }
   }
 }
+

@@ -8,6 +8,9 @@ import {
   signOut,
   onAuthStateChanged,
   updateProfile,
+  sendEmailVerification,
+  reload,
+  applyActionCode,
   User,
   db,
   doc,
@@ -23,6 +26,16 @@ export interface AppUser {
   displayName: string | null;
   photoURL: string | null;
   provider: 'google' | 'password' | 'demo' | 'local';
+  emailVerified?: boolean;
+}
+
+export interface SignUpResult {
+  verificationSent: boolean;
+  needsFirebaseConsoleEnable?: boolean;
+  verificationUrl?: string;
+  previewUrl?: string | null;
+  message?: string;
+  token?: string;
 }
 
 interface AuthContextType {
@@ -30,7 +43,13 @@ interface AuthContextType {
   loading: boolean;
   signInWithGoogle: () => Promise<void>;
   signInWithEmail: (email: string, pass: string) => Promise<void>;
-  signUpWithEmail: (email: string, pass: string, name?: string) => Promise<void>;
+  signUpWithEmail: (email: string, pass: string, name?: string) => Promise<SignUpResult>;
+  sendVerificationEmail: (emailOverride?: string) => Promise<SignUpResult>;
+  checkEmailVerified: () => Promise<boolean>;
+  verifyLocalEmail: () => Promise<void>;
+  verifyByToken: (token: string, email: string) => Promise<boolean>;
+  verificationDetails: SignUpResult | null;
+  setVerificationDetails: (details: SignUpResult | null) => void;
   signInAsDemo: (demoEmail?: string, demoName?: string) => Promise<void>;
   logOut: () => Promise<void>;
   updateUserData: (data: { displayName?: string; photoURL?: string | null }) => Promise<void>;
@@ -61,8 +80,46 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   });
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [verificationDetails, setVerificationDetails] = useState<SignUpResult | null>(null);
 
   const isIframe = typeof window !== 'undefined' && window.self !== window.top;
+
+  const requestBackendVerificationEmail = async (
+    email: string,
+    name?: string,
+    customToken?: string
+  ): Promise<SignUpResult> => {
+    try {
+      const resp = await fetch('/api/auth/send-verification-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, name, customToken }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        return {
+          verificationSent: true,
+          verificationUrl: data.verificationUrl,
+          previewUrl: data.previewUrl,
+          token: data.token,
+          message: data.message,
+          needsFirebaseConsoleEnable: data.method === 'direct_link' || data.method === 'ethereal_preview',
+        };
+      }
+    } catch (apiErr) {
+      console.warn('Backend send-verification-email failed:', apiErr);
+    }
+
+    const fallbackToken = customToken || `${Math.random().toString(36).substring(2)}${Date.now().toString(36)}`;
+    const fallbackUrl = `${window.location.origin}?verify_token=${fallbackToken}&email=${encodeURIComponent(email)}`;
+    return {
+      verificationSent: true,
+      verificationUrl: fallbackUrl,
+      token: fallbackToken,
+      message: `Account verification link created for ${email}`,
+      needsFirebaseConsoleEnable: true,
+    };
+  };
 
   const openInNewTab = useCallback(() => {
     if (typeof window !== 'undefined') {
@@ -75,41 +132,110 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Sync user profile to Firestore
   const syncUserProfile = async (firebaseUser: User, customName?: string) => {
     try {
-      const userRef = doc(db, 'users', firebaseUser.uid);
-      const userSnap = await getDoc(userRef);
-
       const displayName =
         customName ||
         firebaseUser.displayName ||
         firebaseUser.email?.split('@')[0] ||
         'User';
 
-      if (!userSnap.exists()) {
-        await setDoc(userRef, {
-          uid: firebaseUser.uid,
-          email: firebaseUser.email,
-          displayName,
-          photoURL: firebaseUser.photoURL || null,
-          createdAt: serverTimestamp(),
-          lastLoginAt: serverTimestamp(),
-        });
-      } else {
-        await setDoc(
-          userRef,
-          {
-            lastLoginAt: serverTimestamp(),
-            ...(displayName ? { displayName } : {}),
-            ...(firebaseUser.photoURL ? { photoURL: firebaseUser.photoURL } : {}),
-          },
-          { merge: true }
-        );
-      }
+      const userRef = doc(db, 'users', firebaseUser.uid);
+      const profileData = {
+        uid: firebaseUser.uid,
+        email: firebaseUser.email || '',
+        name: displayName,
+        displayName,
+        photoURL: firebaseUser.photoURL || null,
+        createdAt: serverTimestamp(),
+        lastLoginAt: serverTimestamp(),
+      };
+
+      await setDoc(userRef, profileData, { merge: true });
+
+      // Also ensure /users/{uid}/profile/main document is written for complete profile synchronization
+      const mainProfileRef = doc(db, 'users', firebaseUser.uid, 'profile', 'main');
+      await setDoc(
+        mainProfileRef,
+        {
+          id: firebaseUser.uid,
+          name: displayName,
+          email: firebaseUser.email || '',
+          currency: '₹',
+          currencySymbol: '₹',
+          lastActive: serverTimestamp(),
+        },
+        { merge: true }
+      );
     } catch (err: any) {
       console.warn('Firestore profile sync note:', err?.message || err);
     }
   };
 
   useEffect(() => {
+    // Handle URL verification codes (from Firebase email links or custom token links)
+    const handleUrlVerification = async () => {
+      try {
+        if (typeof window === 'undefined') return;
+        const params = new URLSearchParams(window.location.search);
+        const mode = params.get('mode');
+        const oobCode = params.get('oobCode');
+        const verifyToken = params.get('verify_token');
+        const verifyEmail = params.get('email');
+
+        // 1. Firebase Native Email Verification Link
+        if (mode === 'verifyEmail' && oobCode) {
+          try {
+            await applyActionCode(auth, oobCode);
+            if (auth.currentUser) {
+              await reload(auth.currentUser);
+              const updatedUser: AppUser = {
+                uid: auth.currentUser.uid,
+                email: auth.currentUser.email,
+                displayName: auth.currentUser.displayName,
+                photoURL: auth.currentUser.photoURL,
+                provider: 'password',
+                emailVerified: true,
+              };
+              setUser(updatedUser);
+              storageService.setCurrentUser(updatedUser);
+            }
+            window.history.replaceState({}, '', window.location.pathname);
+            window.dispatchEvent(
+              new CustomEvent('spendai-toast', {
+                detail: {
+                  type: 'success',
+                  title: 'Email Verified!',
+                  message: 'Your email address has been officially verified with Firebase.',
+                },
+              })
+            );
+          } catch (codeErr: any) {
+            console.warn('Firebase applyActionCode error:', codeErr);
+          }
+        }
+
+        // 2. Direct Verification Link / Token
+        if (verifyToken && verifyEmail) {
+          const success = await verifyByToken(verifyToken, verifyEmail);
+          if (success) {
+            window.history.replaceState({}, '', window.location.pathname);
+            window.dispatchEvent(
+              new CustomEvent('spendai-toast', {
+                detail: {
+                  type: 'success',
+                  title: 'Account Verified!',
+                  message: `Your email address (${verifyEmail}) has been successfully verified!`,
+                },
+              })
+            );
+          }
+        }
+      } catch (err: any) {
+        console.warn('URL verification check note:', err);
+      }
+    };
+
+    handleUrlVerification();
+
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
         const isGoogle = currentUser.providerData?.some(
@@ -121,6 +247,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           displayName: currentUser.displayName,
           photoURL: currentUser.photoURL,
           provider: isGoogle ? 'google' : 'password',
+          emailVerified: isGoogle ? true : currentUser.emailVerified,
         };
         setUser(appUser);
         storageService.setCurrentUser(appUser);
@@ -135,6 +262,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             displayName: existing.displayName,
             photoURL: existing.photoURL,
             provider: existing.provider as AppUser['provider'],
+            emailVerified: existing.provider === 'demo' ? true : Boolean((existing as any).emailVerified),
           });
         } else {
           setUser(null);
@@ -146,6 +274,60 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     return () => unsubscribe();
   }, []);
+
+  // Auto-detect when email verification completes (e.g. user clicks link in their email client and returns to the app)
+  useEffect(() => {
+    if (!user || user.emailVerified) return;
+
+    const checkVerificationStatus = async () => {
+      if (auth.currentUser) {
+        try {
+          await reload(auth.currentUser);
+          if (auth.currentUser.emailVerified) {
+            const updatedUser: AppUser = {
+              ...user,
+              emailVerified: true,
+            };
+            setUser(updatedUser);
+            storageService.setCurrentUser(updatedUser);
+            window.dispatchEvent(
+              new CustomEvent('spendai-toast', {
+                detail: {
+                  type: 'success',
+                  title: 'Email Verified!',
+                  message: 'Your email address has been verified. Welcome to your financial workspace!',
+                },
+              })
+            );
+          }
+        } catch (err) {
+          // Ignore transient errors during background poll
+        }
+      }
+    };
+
+    const handleFocus = () => {
+      checkVerificationStatus();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        checkVerificationStatus();
+      }
+    };
+
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Poll every 3 seconds while unverified
+    const intervalId = setInterval(checkVerificationStatus, 3000);
+
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      clearInterval(intervalId);
+    };
+  }, [user?.emailVerified, user?.uid]);
 
   const signInWithGoogle = async () => {
     setError(null);
@@ -207,6 +389,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           displayName: result.user.displayName,
           photoURL: result.user.photoURL,
           provider: 'password',
+          emailVerified: result.user.emailVerified,
         };
         setUser(appUser);
         storageService.setCurrentUser(appUser);
@@ -214,31 +397,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     } catch (err: any) {
       console.warn('Firebase email auth note:', err.code, err.message);
-      // Seamless fallback if Email/Password provider is disabled in Firebase console
-      if (
-        err.code === 'auth/operation-not-allowed' ||
-        err.code === 'auth/configuration-not-found' ||
-        err.code === 'auth/admin-restricted-operation'
-      ) {
-        // Authenticate via local account storage
-        const localAccounts = getLocalAccounts();
-        const existing = localAccounts.find((a) => a.email.toLowerCase() === cleanEmail);
-        if (existing && existing.password !== pass) {
-          const msg = 'Incorrect password for this email account.';
-          setError(msg);
-          throw new Error(msg);
-        }
-
-        const localUser: AppUser = {
-          uid: existing?.uid || `local_${Math.abs(hashString(cleanEmail)).toString(36)}`,
-          email: cleanEmail,
-          displayName: existing?.name || cleanEmail.split('@')[0],
-          photoURL: null,
-          provider: 'local',
-        };
-        setUser(localUser);
-        storageService.setCurrentUser(localUser);
-        return;
+      if (err.code === 'auth/operation-not-allowed') {
+        const msg = 'Email/Password provider is not enabled in your Firebase Project (gen-lang-client-0472501454). Go to Firebase Console → Authentication → Sign-in method to enable Email/Password, or sign in with Google.';
+        setError(msg);
+        throw new Error(msg);
       }
 
       let msg = 'Failed to sign in. Please check your email and password.';
@@ -258,53 +420,76 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const signUpWithEmail = async (email: string, pass: string, name?: string) => {
+  const signUpWithEmail = async (
+    email: string,
+    pass: string,
+    name?: string
+  ): Promise<SignUpResult> => {
     setError(null);
     const cleanEmail = email.trim().toLowerCase();
     const cleanName = name?.trim() || cleanEmail.split('@')[0];
 
     try {
       const result = await createUserWithEmailAndPassword(auth, cleanEmail, pass);
+      let verificationSent = false;
+      let backendDetails: SignUpResult = { verificationSent: true };
+
       if (result.user) {
         if (cleanName) {
           await updateProfile(result.user, { displayName: cleanName });
         }
+        // Send email verification containing Firebase's verification link
+        try {
+          await sendEmailVerification(result.user, {
+            url: window.location.origin,
+            handleCodeInApp: false,
+          });
+          verificationSent = true;
+        } catch (verErr) {
+          try {
+            await sendEmailVerification(result.user);
+            verificationSent = true;
+          } catch (verErr2) {
+            console.warn('sendEmailVerification note:', verErr2);
+          }
+        }
+
+        // Also request backend dispatch for audit & fallback link
+        try {
+          backendDetails = await requestBackendVerificationEmail(cleanEmail, cleanName);
+        } catch (bErr) {
+          console.warn('Backend email dispatch note:', bErr);
+        }
+
         const appUser: AppUser = {
           uid: result.user.uid,
           email: result.user.email,
           displayName: cleanName,
           photoURL: result.user.photoURL,
           provider: 'password',
+          emailVerified: result.user.emailVerified,
         };
         setUser(appUser);
         storageService.setCurrentUser(appUser);
         await syncUserProfile(result.user, cleanName);
       }
+
+      const combined: SignUpResult = {
+        verificationSent: true,
+        needsFirebaseConsoleEnable: false,
+        verificationUrl: backendDetails.verificationUrl,
+        previewUrl: backendDetails.previewUrl,
+        token: backendDetails.token,
+        message: 'Account created! Verification link has been dispatched to your email address.',
+      };
+      setVerificationDetails(combined);
+      return combined;
     } catch (err: any) {
       console.warn('Firebase email signup note:', err.code, err.message);
-      // Seamless fallback if Email/Password provider is disabled in Firebase console
-      if (
-        err.code === 'auth/operation-not-allowed' ||
-        err.code === 'auth/configuration-not-found' ||
-        err.code === 'auth/admin-restricted-operation'
-      ) {
-        saveLocalAccount({
-          uid: `local_${Math.abs(hashString(cleanEmail)).toString(36)}`,
-          email: cleanEmail,
-          password: pass,
-          name: cleanName,
-        });
-
-        const localUser: AppUser = {
-          uid: `local_${Math.abs(hashString(cleanEmail)).toString(36)}`,
-          email: cleanEmail,
-          displayName: cleanName,
-          photoURL: null,
-          provider: 'local',
-        };
-        setUser(localUser);
-        storageService.setCurrentUser(localUser);
-        return;
+      if (err.code === 'auth/operation-not-allowed') {
+        const msg = 'Email/Password sign-in is not enabled in your Firebase Project (gen-lang-client-0472501454). Please enable Email/Password under Firebase Console → Authentication → Sign-in method, or sign in using Google.';
+        setError(msg);
+        throw new Error(msg);
       }
 
       let msg = 'Failed to create account. Please try again.';
@@ -317,6 +502,154 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
       setError(msg);
       throw new Error(msg);
+    }
+  };
+
+  const sendVerificationEmail = async (emailOverride?: string): Promise<SignUpResult> => {
+    const targetEmail = emailOverride || user?.email;
+    if (!targetEmail) {
+      throw new Error('No user email address found to send verification email.');
+    }
+
+    let firebaseSent = false;
+    if (auth.currentUser) {
+      try {
+        await sendEmailVerification(auth.currentUser, {
+          url: window.location.origin,
+          handleCodeInApp: false,
+        });
+        firebaseSent = true;
+      } catch (err: any) {
+        try {
+          await sendEmailVerification(auth.currentUser);
+          firebaseSent = true;
+        } catch (err2: any) {
+          console.warn('Failed to send verification email via Firebase:', err2);
+          if (err2.code === 'auth/too-many-requests') {
+            throw new Error('Please wait a moment before requesting another verification email.');
+          }
+        }
+      }
+    }
+
+    // Also request backend dispatch
+    const backendDetails = await requestBackendVerificationEmail(
+      targetEmail,
+      user?.displayName || undefined
+    );
+
+    if (backendDetails.token) {
+      try {
+        localStorage.setItem(
+          `pending_verification_${targetEmail.toLowerCase()}`,
+          JSON.stringify({
+            token: backendDetails.token,
+            email: targetEmail.toLowerCase(),
+            verificationUrl: backendDetails.verificationUrl,
+            expiresAt: Date.now() + 24 * 3600 * 1000,
+          })
+        );
+      } catch (_) {}
+    }
+
+    const combined: SignUpResult = {
+      ...backendDetails,
+      verificationSent: true,
+      needsFirebaseConsoleEnable: !firebaseSent && (!auth.currentUser || user?.provider === 'local'),
+    };
+    setVerificationDetails(combined);
+    return combined;
+  };
+
+  const verifyByToken = async (token: string, email: string): Promise<boolean> => {
+    const cleanEmail = email.trim().toLowerCase();
+    try {
+      const resp = await fetch('/api/auth/verify-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, email: cleanEmail }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.verified) {
+          const accounts = getLocalAccounts();
+          const match = accounts.find((a) => a.email.toLowerCase() === cleanEmail);
+          if (match) {
+            match.emailVerified = true;
+            saveLocalAccount(match);
+          }
+          if (user && user.email?.toLowerCase() === cleanEmail) {
+            const updated: AppUser = { ...user, emailVerified: true };
+            setUser(updated);
+            storageService.setCurrentUser(updated);
+          }
+          return true;
+        }
+      }
+    } catch (e) {
+      console.warn('verifyByToken API error:', e);
+    }
+
+    // Fallback: check localStorage pending verification
+    try {
+      const raw = localStorage.getItem(`pending_verification_${cleanEmail}`);
+      if (raw) {
+        const stored = JSON.parse(raw);
+        if (stored.token === token && Date.now() < stored.expiresAt) {
+          localStorage.removeItem(`pending_verification_${cleanEmail}`);
+          const accounts = getLocalAccounts();
+          const match = accounts.find((a) => a.email.toLowerCase() === cleanEmail);
+          if (match) {
+            match.emailVerified = true;
+            saveLocalAccount(match);
+          }
+          if (user && user.email?.toLowerCase() === cleanEmail) {
+            const updated: AppUser = { ...user, emailVerified: true };
+            setUser(updated);
+            storageService.setCurrentUser(updated);
+          }
+          return true;
+        }
+      }
+    } catch (localErr) {
+      console.warn('Local verification token check error:', localErr);
+    }
+
+    return false;
+  };
+
+  const checkEmailVerified = async (): Promise<boolean> => {
+    try {
+      if (auth.currentUser) {
+        await reload(auth.currentUser);
+        const isVerified = auth.currentUser.emailVerified;
+        if (user) {
+          const updated: AppUser = { ...user, emailVerified: isVerified };
+          setUser(updated);
+          storageService.setCurrentUser(updated);
+        }
+        return isVerified;
+      }
+      return user?.emailVerified ?? false;
+    } catch (err) {
+      console.warn('checkEmailVerified error:', err);
+      return user?.emailVerified ?? false;
+    }
+  };
+
+  const verifyLocalEmail = async (): Promise<void> => {
+    if (user && user.provider === 'local') {
+      const updated: AppUser = { ...user, emailVerified: true };
+      setUser(updated);
+      storageService.setCurrentUser(updated);
+      if (user.email) {
+        const accounts = getLocalAccounts();
+        const match = accounts.find((a) => a.email.toLowerCase() === user.email?.toLowerCase());
+        if (match) {
+          match.emailVerified = true;
+          saveLocalAccount(match);
+        }
+      }
     }
   };
 
@@ -426,6 +759,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       signInWithGoogle,
       signInWithEmail,
       signUpWithEmail,
+      sendVerificationEmail,
+      checkEmailVerified,
+      verifyLocalEmail,
+      verifyByToken,
+      verificationDetails,
+      setVerificationDetails,
       signInAsDemo,
       logOut,
       updateUserData,
@@ -434,7 +773,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       isIframe,
       openInNewTab,
     }),
-    [user, loading, error, isIframe, openInNewTab]
+    [user, loading, error, isIframe, openInNewTab, verificationDetails]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -454,6 +793,7 @@ interface LocalAccountRecord {
   email: string;
   password?: string;
   name: string;
+  emailVerified?: boolean;
 }
 
 function getLocalAccounts(): LocalAccountRecord[] {

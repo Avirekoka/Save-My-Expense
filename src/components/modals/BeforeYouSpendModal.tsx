@@ -12,7 +12,7 @@ import {
 import { storageService } from '../../services/storage/storage.service';
 import { aiService, SpendAdvisorResult } from '../../services/ai/ai.service';
 import { Category } from '../../types';
-import { formatCurrency } from '../../utils/formatters';
+import { formatCurrency, getCurrentMonth } from '../../utils/formatters';
 import { useScrollLock } from '../../hooks/useScrollLock';
 
 interface BeforeYouSpendModalProps {
@@ -35,7 +35,7 @@ export const BeforeYouSpendModal: React.FC<BeforeYouSpendModalProps> = ({
   const [result, setResult] = useState<SpendAdvisorResult | null>(null);
 
   const categories = storageService.getCategories();
-  const summary = storageService.calculateMonthSummary('2026-08');
+  const summary = storageService.calculateMonthSummary(getCurrentMonth());
   const budgets = storageService.getBudgets();
 
   const handleEvaluate = async (e: React.FormEvent) => {

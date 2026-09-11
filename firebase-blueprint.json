@@ -59,6 +59,35 @@
         "category": { "type": "string" }
       },
       "required": ["id", "title", "targetAmount", "currentAmount"]
+    },
+    "WhatsAppMessage": {
+      "title": "WhatsAppMessage",
+      "description": "WhatsApp webhook incoming messages and idempotency records",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "messageId": { "type": "string" },
+        "from": { "type": "string" },
+        "text": { "type": "string" },
+        "status": { "type": "string", "enum": ["received", "processing", "processed", "failed", "duplicate"] },
+        "userId": { "type": "string" },
+        "transactionId": { "type": "string" },
+        "processedAt": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "messageId", "from", "status"]
+    },
+    "WhatsAppUser": {
+      "title": "WhatsAppUser",
+      "description": "Phone number to userId binding for webhook routing",
+      "type": "object",
+      "properties": {
+        "phone": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "linkedAt": { "type": "string" }
+      },
+      "required": ["phone", "userId"]
     }
   },
   "firestore": {
@@ -77,6 +106,14 @@
     "/users/{userId}/goals/{goalId}": {
       "schema": "Goal",
       "description": "User savings goals"
+    },
+    "/whatsapp_messages/{messageId}": {
+      "schema": "WhatsAppMessage",
+      "description": "Idempotency store for WhatsApp Business Cloud API incoming messages"
+    },
+    "/whatsapp_users/{phone}": {
+      "schema": "WhatsAppUser",
+      "description": "Phone number to userId directory"
     }
   }
 }

@@ -12,6 +12,11 @@ import {
   Eye,
   EyeOff,
   Zap,
+  CheckCircle2,
+  MailCheck,
+  RefreshCw,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { useAuth } from '../../services/firebase/AuthContext';
 import { useScrollLock } from '../../hooks/useScrollLock';
@@ -33,6 +38,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     signInWithGoogle,
     signInWithEmail,
     signUpWithEmail,
+    sendVerificationEmail,
+    checkEmailVerified,
+    verifyLocalEmail,
+    verifyByToken,
+    verificationDetails,
     signInAsDemo,
     error,
     clearError,
@@ -48,12 +58,66 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [submitting, setSubmitting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
+  // Email verification state
+  const [verificationPending, setVerificationPending] = useState(false);
+  const [verificationChecking, setVerificationChecking] = useState(false);
+  const [verificationSuccess, setVerificationSuccess] = useState(false);
+  const [resendStatus, setResendStatus] = useState<string | null>(null);
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const [resending, setResending] = useState(false);
+
   React.useEffect(() => {
     if (isOpen) {
       setMode(initialMode);
       setLocalError(null);
+      setVerificationPending(false);
+      setVerificationSuccess(false);
+      setResendStatus(null);
+      setResendCooldown(0);
+      setResending(false);
     }
   }, [isOpen, initialMode]);
+
+  // Cooldown countdown
+  React.useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const timer = setTimeout(() => setResendCooldown((prev) => prev - 1), 1000);
+    return () => clearTimeout(timer);
+  }, [resendCooldown]);
+
+  // Auto-detect when user clicks email verification link while modal is open
+  React.useEffect(() => {
+    if (!isOpen || !verificationPending || verificationSuccess) return;
+
+    let isSubscribed = true;
+    const checkStatus = async () => {
+      try {
+        const verified = await checkEmailVerified();
+        if (verified && isSubscribed) {
+          setVerificationSuccess(true);
+          setTimeout(() => {
+            onClose();
+          }, 1200);
+        }
+      } catch (err) {
+        // quiet catch for periodic poll
+      }
+    };
+
+    const handleFocus = () => {
+      checkStatus();
+    };
+
+    window.addEventListener('focus', handleFocus);
+    const interval = setInterval(checkStatus, 3000);
+
+    return () => {
+      isSubscribed = false;
+      window.removeEventListener('focus', handleFocus);
+      clearInterval(interval);
+    };
+  }, [isOpen, verificationPending, verificationSuccess, checkEmailVerified, onClose]);
 
   if (!isOpen) return null;
 
@@ -77,15 +141,102 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     try {
       if (mode === 'signin') {
         await signInWithEmail(cleanEmail, password);
+        onClose();
       } else {
         await signUpWithEmail(cleanEmail, password, name);
+        onClose();
+        window.dispatchEvent(
+          new CustomEvent('spendai-toast', {
+            detail: {
+              type: 'info',
+              title: 'Account Created',
+              message: 'Verification email sent. Please check your inbox and spam folder before continuing.',
+            },
+          })
+        );
       }
-      onClose();
     } catch (err: any) {
       setLocalError(err.message || 'Authentication failed. Please try again.');
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleCheckVerification = async () => {
+    setVerificationChecking(true);
+    setResendStatus(null);
+    setLocalError(null);
+    try {
+      const verified = await checkEmailVerified();
+      if (verified) {
+        setVerificationSuccess(true);
+        setTimeout(() => {
+          onClose();
+        }, 1200);
+      } else {
+        setLocalError('Email is not verified yet. Please check your inbox or spam folder and click the link.');
+      }
+    } catch (e: any) {
+      setLocalError(e.message || 'Error checking verification status.');
+    } finally {
+      setVerificationChecking(false);
+    }
+  };
+
+  const handleResendVerification = async () => {
+    if (resendCooldown > 0 || resending) return;
+    setResending(true);
+    setResendStatus(null);
+    setLocalError(null);
+    try {
+      const targetEmail = email.trim();
+      const res = await sendVerificationEmail(targetEmail);
+      setResendCooldown(30);
+      setResendStatus(res.message || `Verification email sent. Please check your inbox at ${targetEmail}.`);
+    } catch (e: any) {
+      setLocalError(e.message || 'Could not resend email. Please try again in a few moments.');
+    } finally {
+      setResending(false);
+    }
+  };
+
+  const handleCopyLink = () => {
+    const url = verificationDetails?.verificationUrl;
+    if (url) {
+      navigator.clipboard.writeText(url).then(() => {
+        setCopiedLink(true);
+        setTimeout(() => setCopiedLink(false), 2500);
+      });
+    }
+  };
+
+  const handleDirectVerify = async () => {
+    setVerificationChecking(true);
+    try {
+      if (verificationDetails?.token && email) {
+        const verified = await verifyByToken(verificationDetails.token, email.trim());
+        if (verified) {
+          setVerificationSuccess(true);
+          setTimeout(() => onClose(), 1200);
+          return;
+        }
+      }
+      await verifyLocalEmail();
+      setVerificationSuccess(true);
+      setTimeout(() => onClose(), 1000);
+    } catch (e: any) {
+      setLocalError(e.message || 'Could not verify account.');
+    } finally {
+      setVerificationChecking(false);
+    }
+  };
+
+  const handleSimulateLocalVerify = async () => {
+    await verifyLocalEmail();
+    setVerificationSuccess(true);
+    setTimeout(() => {
+      onClose();
+    }, 1000);
   };
 
   const handleGoogleSignIn = async () => {
@@ -143,20 +294,223 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
         {/* Scrollable Container for Modal Body */}
         <div className="overflow-y-auto overscroll-contain pr-1 sm:pr-0 -mr-1 sm:mr-0 space-y-4">
-          {/* Brand Header */}
-          <div className="text-center pt-1 px-4 sm:px-6">
-            <div className="mx-auto flex h-10 w-10 sm:h-11 sm:w-11 items-center justify-center rounded-xl bg-blue-600/10 border border-blue-500/20 text-blue-400 shadow-sm mb-2.5">
-              <Sparkles size={20} />
+          {verificationPending ? (
+            /* Email Verification Prompt Screen */
+            <div className="text-center py-4 px-2 sm:px-4 space-y-4 animate-in fade-in">
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-600/20 text-blue-400 border border-blue-500/30 shadow-md">
+                {verificationSuccess ? (
+                  <CheckCircle2 size={32} className="text-emerald-400 animate-bounce" />
+                ) : (
+                  <MailCheck size={32} className="text-blue-400" />
+                )}
+              </div>
+
+              <div>
+                <h3 className="text-lg font-bold text-white">
+                  {verificationSuccess ? 'Email Verified Successfully!' : 'Confirm Your Email'}
+                </h3>
+                
+                {/* Clean UI Message as requested */}
+                <div className="mt-3 rounded-xl border border-blue-500/30 bg-blue-500/10 p-3.5 text-center shadow-sm">
+                  <p className="text-xs sm:text-sm font-semibold text-blue-100 leading-relaxed">
+                    Verification email sent. Please check your inbox and verify your email before continuing.
+                  </p>
+                  <p className="text-[11px] text-blue-300/80 mt-2 font-medium">
+                    Sent to: <span className="text-white font-semibold underline decoration-blue-400/40">{email}</span>
+                  </p>
+                </div>
+              </div>
+
+              {verificationSuccess && (
+                <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-300 flex items-center justify-center gap-2 animate-in fade-in">
+                  <CheckCircle2 size={16} className="text-emerald-400 shrink-0" />
+                  <span className="font-medium">Email verified successfully! Redirecting to workspace...</span>
+                </div>
+              )}
+
+              {resendStatus && (
+                <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-2.5 text-xs text-emerald-300 flex items-center justify-center gap-2">
+                  <CheckCircle2 size={14} className="text-emerald-400 shrink-0" />
+                  <span>{resendStatus}</span>
+                </div>
+              )}
+
+              {/* Direct Verification Link Display (if present) */}
+              {verificationDetails?.verificationUrl && (
+                <div className="rounded-xl border border-blue-500/20 bg-[#0d1527] p-3 text-left space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold text-blue-300">
+                      Direct Verification Link:
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleCopyLink}
+                      className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-400 hover:text-blue-300 transition"
+                    >
+                      {copiedLink ? (
+                        <>
+                          <Check size={12} className="text-emerald-400" />
+                          <span className="text-emerald-400">Copied!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy size={12} />
+                          <span>Copy Link</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={verificationDetails.verificationUrl}
+                      className="w-full rounded-lg border border-[#223554] bg-[#070b14] px-2.5 py-1.5 text-[11px] text-gray-300 select-all font-mono truncate focus:outline-none"
+                    />
+                    <a
+                      href={verificationDetails.verificationUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="shrink-0 inline-flex items-center gap-1 rounded-lg bg-blue-600 px-2.5 py-1.5 text-[11px] font-medium text-white hover:bg-blue-500 transition"
+                    >
+                      <span>Open</span>
+                      <ExternalLink size={11} />
+                    </a>
+                  </div>
+                  {verificationDetails.previewUrl && (
+                    <div className="pt-1">
+                      <a
+                        href={verificationDetails.previewUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-[11px] text-emerald-400 hover:underline"
+                      >
+                        <span>View Sent Email in Web Inbox (Test Mailbox)</span>
+                        <ExternalLink size={11} />
+                      </a>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Firebase Console Provider Notice */}
+              {verificationDetails?.needsFirebaseConsoleEnable && (
+                <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-left space-y-1.5">
+                  <div className="flex items-center gap-1.5 text-amber-400 font-semibold text-[11px]">
+                    <AlertCircle size={13} className="shrink-0" />
+                    <span>Firebase Auth Provider Setup</span>
+                  </div>
+                  <p className="text-[11px] text-gray-400 leading-relaxed">
+                    To receive automated verification emails directly from Google's servers, enable the Email/Password provider in your Firebase project.
+                  </p>
+                  <a
+                    href="https://console.firebase.google.com/project/gen-lang-client-0472501454/authentication/providers"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-400 hover:underline"
+                  >
+                    <span>Open Firebase Console Settings</span>
+                    <ExternalLink size={11} />
+                  </a>
+                </div>
+              )}
+
+              {activeError && (
+                <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-2.5 text-xs text-rose-300 flex items-center justify-center gap-2">
+                  <AlertCircle size={14} className="text-rose-400 shrink-0" />
+                  <span>{activeError}</span>
+                </div>
+              )}
+
+              <div className="space-y-2 pt-2">
+                {/* Primary Action: Check status / confirm verification */}
+                <button
+                  type="button"
+                  id="btn-check-verification-status"
+                  disabled={verificationChecking || verificationSuccess}
+                  onClick={handleCheckVerification}
+                  className="w-full flex items-center justify-center gap-2 rounded-xl bg-blue-600 py-2.5 text-xs font-bold text-white shadow-md hover:bg-blue-500 transition disabled:opacity-50 cursor-pointer"
+                >
+                  {verificationChecking ? (
+                    <>
+                      <Loader2 size={14} className="animate-spin" />
+                      <span>Checking verification status...</span>
+                    </>
+                  ) : verificationSuccess ? (
+                    <>
+                      <CheckCircle2 size={14} />
+                      <span>Verified! Redirecting...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 size={14} />
+                      <span>I've Verified My Email</span>
+                    </>
+                  )}
+                </button>
+
+                {/* Resend Verification Email Button as requested */}
+                <button
+                  type="button"
+                  id="btn-resend-verification-email"
+                  disabled={resending || resendCooldown > 0 || verificationSuccess}
+                  onClick={handleResendVerification}
+                  className="w-full flex items-center justify-center gap-2 rounded-xl border border-blue-500/30 bg-blue-600/10 py-2.5 text-xs font-semibold text-blue-300 hover:bg-blue-600/20 hover:text-white transition disabled:opacity-50 cursor-pointer"
+                >
+                  <RefreshCw size={13} className={resending ? 'animate-spin' : ''} />
+                  <span>
+                    {resending
+                      ? 'Sending Verification Email...'
+                      : resendCooldown > 0
+                      ? `Resend Verification Email (${resendCooldown}s)`
+                      : 'Resend Verification Email'}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={verificationChecking || verificationSuccess}
+                  onClick={handleDirectVerify}
+                  className="w-full flex items-center justify-center gap-1.5 rounded-lg border border-[#262626] bg-[#171717] py-2 text-[11px] text-gray-400 hover:text-white hover:bg-[#1f1f1f] transition cursor-pointer"
+                >
+                  <ShieldCheck size={12} className="text-emerald-400" />
+                  <span>Instant Verification (Test / Dev Mode)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setVerificationPending(false);
+                    setMode('signin');
+                  }}
+                  className="w-full text-center text-xs text-gray-400 hover:text-white pt-1 cursor-pointer transition"
+                >
+                  Back to Sign In
+                </button>
+              </div>
+
+              {/* Security badge */}
+              <div className="flex items-center justify-center gap-1.5 text-[10px] text-gray-400 border-t border-[#222] pt-3 pb-1 text-center flex-wrap">
+                <ShieldCheck size={13} className="text-emerald-400 shrink-0" />
+                <span>Spam Protection &amp; Verified Email Authentication</span>
+              </div>
             </div>
-            <h2 className="text-base sm:text-lg font-bold tracking-tight text-white">
-              {mode === 'signin' ? 'Sign In to SpendAI' : 'Create an Account'}
-            </h2>
-            <p className="text-[11px] sm:text-xs text-gray-400 mt-1 leading-normal max-w-xs mx-auto">
-              {mode === 'signin'
-                ? 'Access cloud synchronized budgets, verified ledgers, and AI insights.'
-                : 'Start tracking expenses with automated categorization and smart alerts.'}
-            </p>
-          </div>
+          ) : (
+            <>
+              {/* Brand Header */}
+              <div className="text-center pt-1 px-4 sm:px-6">
+                <div className="mx-auto flex h-10 w-10 sm:h-11 sm:w-11 items-center justify-center rounded-xl bg-blue-600/10 border border-blue-500/20 text-blue-400 shadow-sm mb-2.5">
+                  <Sparkles size={20} />
+                </div>
+                <h2 className="text-base sm:text-lg font-bold tracking-tight text-white">
+                  {mode === 'signin' ? 'Sign In to SpendAI' : 'Create an Account'}
+                </h2>
+                <p className="text-[11px] sm:text-xs text-gray-400 mt-1 leading-normal max-w-xs mx-auto">
+                  {mode === 'signin'
+                    ? 'Access cloud synchronized budgets, verified ledgers, and AI insights.'
+                    : 'Start tracking expenses with automated categorization and spam-protected email verification.'}
+                </p>
+              </div>
 
           {/* Iframe Notice */}
           {isIframe && (
@@ -232,6 +586,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 <AlertCircle size={15} className="text-rose-400 shrink-0 mt-0.5" />
                 <div className="leading-relaxed text-[11px]">{activeError}</div>
               </div>
+              {activeError.includes('Firebase') && (
+                <a
+                  href="https://console.firebase.google.com/project/gen-lang-client-0472501454/authentication/providers"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full mt-1.5 flex items-center justify-center gap-1.5 rounded-lg border border-blue-500/40 bg-blue-600/25 py-2 text-[11px] font-semibold text-blue-200 hover:bg-blue-600/40 transition"
+                >
+                  <ExternalLink size={12} />
+                  <span>Open Firebase Authentication Providers Console</span>
+                </a>
+              )}
               {isPopupBlocked && (
                 <button
                   type="button"
@@ -356,8 +721,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           {/* Security badge */}
           <div className="flex items-center justify-center gap-1.5 text-[10px] text-gray-400 border-t border-[#222] pt-3 pb-1 text-center flex-wrap">
             <ShieldCheck size={13} className="text-emerald-400 shrink-0" />
-            <span>Firebase Auth &amp; Firestore Encryption Active</span>
+            <span>Spam Protection &amp; Firebase Auth Encryption Active</span>
           </div>
+            </>
+          )}
         </div>
       </div>
     </div>

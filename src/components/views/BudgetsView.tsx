@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { Budget, Category } from '../../types';
 import { storageService, NOTIFY_EVENT } from '../../services/storage/storage.service';
-import { formatCurrency } from '../../utils/formatters';
+import { formatCurrency, getCurrentMonth } from '../../utils/formatters';
 import { CategoryIcon } from '../common/CategoryIcon';
 import { useScrollLock } from '../../hooks/useScrollLock';
 
@@ -48,7 +48,8 @@ export const BudgetsView: React.FC<BudgetsViewProps> = ({
     return () => window.removeEventListener(NOTIFY_EVENT, load);
   }, []);
 
-  const summary = storageService.calculateMonthSummary('2026-08');
+  const activeMonth = currentMonth && currentMonth !== 'all' ? currentMonth : getCurrentMonth();
+  const summary = storageService.calculateMonthSummary(activeMonth);
 
   const handleSaveBudget = (e: React.FormEvent) => {
     e.preventDefault();
@@ -107,7 +108,7 @@ export const BudgetsView: React.FC<BudgetsViewProps> = ({
         id: `bg_${r.categoryId}`,
         categoryId: r.categoryId,
         monthlyLimit: r.recommendedAmount,
-        period: '2026-08',
+        period: activeMonth,
         alertThreshold: 80,
       });
     });
@@ -156,7 +157,7 @@ export const BudgetsView: React.FC<BudgetsViewProps> = ({
                 id: `bg_${Date.now()}`,
                 categoryId: 'food',
                 monthlyLimit: 10000,
-                period: '2026-08',
+                period: activeMonth,
                 alertThreshold: 80,
               });
               setIsModalOpen(true);

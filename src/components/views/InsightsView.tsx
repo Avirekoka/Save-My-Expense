@@ -15,7 +15,7 @@ import { AIInsight, Category } from '../../types';
 import { storageService, NOTIFY_EVENT } from '../../services/storage/storage.service';
 import { aiService } from '../../services/ai/ai.service';
 import { InsightGenerator } from '../../services/ai/insight-generator';
-import { formatCurrency, getMonthName } from '../../utils/formatters';
+import { formatCurrency, getMonthName, getCurrentMonth, getPreviousMonth } from '../../utils/formatters';
 
 interface InsightsViewProps {
   currentMonth: string;
@@ -30,10 +30,13 @@ export const InsightsView: React.FC<InsightsViewProps> = ({
   const [categories, setCategories] = useState<Category[]>([]);
   const [refreshing, setRefreshing] = useState(false);
 
+  const activeMonth = currentMonth && currentMonth !== 'all' ? currentMonth : getCurrentMonth();
+  const prevMonth = getPreviousMonth(activeMonth);
+
   const load = () => {
     setCategories(storageService.getCategories());
-    const currentTxs = storageService.getTransactions().filter((t) => t.date.startsWith('2026-08'));
-    const prevTxs = storageService.getTransactions().filter((t) => t.date.startsWith('2026-07'));
+    const currentTxs = storageService.getTransactions().filter((t) => t.date.startsWith(activeMonth));
+    const prevTxs = storageService.getTransactions().filter((t) => t.date.startsWith(prevMonth));
     const cats = storageService.getCategories();
     const dynamicInsights = InsightGenerator.generateDynamicInsights(currentTxs, prevTxs, cats);
     setInsights(dynamicInsights);
@@ -43,13 +46,13 @@ export const InsightsView: React.FC<InsightsViewProps> = ({
     load();
     window.addEventListener(NOTIFY_EVENT, load);
     return () => window.removeEventListener(NOTIFY_EVENT, load);
-  }, []);
+  }, [activeMonth]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
-      const currentTxs = storageService.getTransactions().filter((t) => t.date.startsWith('2026-08'));
-      const prevTxs = storageService.getTransactions().filter((t) => t.date.startsWith('2026-07'));
+      const currentTxs = storageService.getTransactions().filter((t) => t.date.startsWith(activeMonth));
+      const prevTxs = storageService.getTransactions().filter((t) => t.date.startsWith(prevMonth));
       const cats = storageService.getCategories();
       const budgets = storageService.getBudgets();
       const generated = await aiService.generateMonthlyInsights(currentTxs, prevTxs, cats, budgets);

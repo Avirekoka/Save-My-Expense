@@ -32,23 +32,32 @@ import { Category, Transaction } from '../../types';
 import { storageService, NOTIFY_EVENT } from '../../services/storage/storage.service';
 import { SpendingAnalyzer, MoMComparisonItem } from '../../services/ai/spending-analyzer';
 import { MonthlyReportGenerator } from '../../services/reports/pdf-report-generator';
-import { formatCurrency, getMonthName } from '../../utils/formatters';
+import { formatCurrency, getMonthName, getCurrentMonth, getPreviousMonth, getLastThreeMonths } from '../../utils/formatters';
 import { CategoryIcon } from '../common/CategoryIcon';
+import { DailyExpenseHeatmapMatrix } from '../analytics/DailyExpenseHeatmapMatrix';
 
 interface AnalyticsViewProps {
   currentMonth: string;
   currencySymbol: string;
+  onNavigate?: (viewId: string) => void;
+  onOpenAddModal?: (tx?: Transaction) => void;
+  onNavigateToTransactions?: (startDate: string, endDate: string) => void;
 }
 
 export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   currentMonth,
   currencySymbol,
+  onNavigate,
+  onOpenAddModal,
+  onNavigateToTransactions,
 }) => {
   const [categories, setCategories] = useState<Category[]>([]);
-  const [activeTab, setActiveTab] = useState<'mom' | 'cashflow' | 'merchants' | 'methods'>('mom');
+  const [activeTab, setActiveTab] = useState<'heatmap' | 'mom' | 'cashflow' | 'merchants' | 'methods'>('heatmap');
   const [isGenerating, setIsGenerating] = useState(false);
   const [reportSuccess, setReportSuccess] = useState<string | null>(null);
-  const [selectedReportMonth, setSelectedReportMonth] = useState<string>(currentMonth || '2026-08');
+  const [selectedReportMonth, setSelectedReportMonth] = useState<string>(
+    currentMonth && currentMonth !== 'all' ? currentMonth : getCurrentMonth()
+  );
 
   const load = () => {
     setCategories(storageService.getCategories());
@@ -60,25 +69,29 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
     return () => window.removeEventListener(NOTIFY_EVENT, load);
   }, []);
 
-  const augSummary = storageService.calculateMonthSummary('2026-08');
-  const julSummary = storageService.calculateMonthSummary('2026-07');
-  const junSummary = storageService.calculateMonthSummary('2026-06');
+  const activeMonthStr = currentMonth && currentMonth !== 'all' ? currentMonth : getCurrentMonth();
+  const prevMonthStr = getPreviousMonth(activeMonthStr);
+  const prev2MonthStr = getPreviousMonth(prevMonthStr);
+
+  const curSummary = storageService.calculateMonthSummary(activeMonthStr);
+  const prevSummary = storageService.calculateMonthSummary(prevMonthStr);
+  const prev2Summary = storageService.calculateMonthSummary(prev2MonthStr);
 
   const momData = SpendingAnalyzer.compareMonths(
-    augSummary.transactions,
-    julSummary.transactions,
+    curSummary.transactions,
+    prevSummary.transactions,
     categories
   );
 
   // Multi-month trend comparison
   const monthlyTrendData = [
-    { name: 'June 2026', income: junSummary.totalIncome, expenses: junSummary.totalExpenses, saved: junSummary.saved },
-    { name: 'July 2026', income: julSummary.totalIncome, expenses: julSummary.totalExpenses, saved: julSummary.saved },
-    { name: 'August 2026', income: augSummary.totalIncome, expenses: augSummary.totalExpenses, saved: augSummary.saved },
+    { name: getMonthName(prev2MonthStr), income: prev2Summary.totalIncome, expenses: prev2Summary.totalExpenses, saved: prev2Summary.saved },
+    { name: getMonthName(prevMonthStr), income: prevSummary.totalIncome, expenses: prevSummary.totalExpenses, saved: prevSummary.saved },
+    { name: getMonthName(activeMonthStr), income: curSummary.totalIncome, expenses: curSummary.totalExpenses, saved: curSummary.saved },
   ];
 
   // Payment method data
-  const paymentMethodData = Object.entries(augSummary.paymentMethodSpending).map(
+  const paymentMethodData = Object.entries(curSummary.paymentMethodSpending).map(
     ([method, amount]) => ({
       name: method,
       value: amount,
@@ -88,7 +101,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
   const METHOD_COLORS = ['#6366F1', '#EC4899', '#10B981', '#F59E0B', '#3B82F6', '#64748B'];
 
   // Top Merchants list
-  const merchantList = Object.entries(augSummary.merchantSpending)
+  const merchantList = Object.entries(curSummary.merchantSpending)
     .map(([merchant, data]) => ({
       merchant,
       total: data.total,
@@ -98,11 +111,13 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
     }))
     .sort((a, b) => b.total - a.total);
 
-  // 31-Day Calendar Heatmap data for August 2026
-  const calendarDays = Array.from({ length: 31 }, (_, i) => {
+  // Calendar Heatmap data for active month
+  const [yearNum, monthNum] = activeMonthStr.split('-').map(Number);
+  const daysInMonth = new Date(yearNum, monthNum, 0).getDate();
+  const calendarDays = Array.from({ length: daysInMonth }, (_, i) => {
     const day = i + 1;
-    const dateStr = `2026-08-${day.toString().padStart(2, '0')}`;
-    const amount = augSummary.dailySpending[dateStr] || 0;
+    const dateStr = `${activeMonthStr}-${day.toString().padStart(2, '0')}`;
+    const amount = curSummary.dailySpending[dateStr] || 0;
     return { day, dateStr, amount };
   });
 
@@ -153,9 +168,11 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
               className="rounded-xl border border-[#262626] bg-[#0f0f0f] px-3 py-2 text-xs font-semibold text-gray-300 focus:border-blue-500 focus:outline-none"
               title="Select report period"
             >
-              <option value="2026-08">August 2026 (Current)</option>
-              <option value="2026-07">July 2026</option>
-              <option value="2026-06">June 2026</option>
+              {getLastThreeMonths(activeMonthStr).map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.label} {m.value === getCurrentMonth() ? '(Current)' : ''}
+                </option>
+              ))}
             </select>
 
             <button
@@ -176,6 +193,16 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
 
           {/* View Tabs */}
           <div className="flex rounded-xl border border-[#262626] bg-[#0f0f0f] p-1 text-xs">
+            <button
+              onClick={() => setActiveTab('heatmap')}
+              className={`rounded-lg px-3 py-1.5 font-semibold transition cursor-pointer ${
+                activeTab === 'heatmap'
+                  ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              Daily Heatmap
+            </button>
             <button
               onClick={() => setActiveTab('mom')}
               className={`rounded-lg px-3 py-1.5 font-semibold transition cursor-pointer ${
@@ -262,6 +289,16 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
         </div>
       </div>
 
+      {/* Tab 0: Daily Expense Concentration Heatmap Matrix */}
+      {activeTab === 'heatmap' && (
+        <DailyExpenseHeatmapMatrix
+          currentMonth={activeMonthStr}
+          currencySymbol={currencySymbol}
+          onNavigateToTransactions={onNavigateToTransactions}
+          onOpenAddModal={onOpenAddModal}
+        />
+      )}
+
       {/* Tab 1: Month-over-Month Variance Grid */}
       {activeTab === 'mom' && (
         <div className="space-y-5 sm:space-y-6">
@@ -324,49 +361,14 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             </div>
           </div>
 
-          {/* 31-Day Spending Heatmap */}
-          <div className="rounded-xl border border-[#262626] bg-[#141414] p-4 sm:p-5 lg:p-6 shadow-xs">
-            <div className="flex items-center justify-between border-b border-[#262626] pb-4 mb-4">
-              <div>
-                <h2 className="text-base font-bold text-white">August Daily Spending Intensity</h2>
-                <p className="text-xs text-gray-400">
-                  Heatmap matrix indicating concentration of daily expenses
-                </p>
-              </div>
-              <div className="flex items-center gap-2 text-[11px] text-gray-400">
-                <span>Low (₹0)</span>
-                <div className="flex gap-1">
-                  <span className="h-3 w-3 rounded-xs bg-[#222]" />
-                  <span className="h-3 w-3 rounded-xs bg-blue-900/50" />
-                  <span className="h-3 w-3 rounded-xs bg-blue-600" />
-                  <span className="h-3 w-3 rounded-xs bg-blue-400" />
-                </div>
-                <span>High (₹10k+)</span>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-7 sm:grid-cols-10 md:grid-cols-16 gap-2">
-              {calendarDays.map((d) => {
-                let colorClass = 'bg-[#0f0f0f] text-gray-500 border border-[#262626]';
-                if (d.amount > 10000) colorClass = 'bg-blue-500 text-white font-bold border border-blue-400';
-                else if (d.amount > 2000) colorClass = 'bg-blue-600/80 text-white border border-blue-500';
-                else if (d.amount > 0) colorClass = 'bg-blue-900/30 text-blue-300 border border-blue-800/40';
-
-                return (
-                  <div
-                    key={d.day}
-                    title={`${d.dateStr}: ${formatCurrency(d.amount, currencySymbol)}`}
-                    className={`rounded-lg p-2.5 text-center transition cursor-pointer hover:scale-105 ${colorClass}`}
-                  >
-                    <div className="text-[10px] opacity-70">Day {d.day}</div>
-                    <div className="font-mono text-xs mt-0.5">
-                      {d.amount > 0 ? `₹${Math.round(d.amount / 1000)}k` : '—'}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+          {/* Embedded Daily Expense Heatmap Matrix */}
+          <DailyExpenseHeatmapMatrix
+            currentMonth={activeMonthStr}
+            currencySymbol={currencySymbol}
+            onNavigateToTransactions={onNavigateToTransactions}
+            onOpenAddModal={onOpenAddModal}
+            embedded={true}
+          />
         </div>
       )}
 
@@ -386,7 +388,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             <div className="rounded-xl border border-[#262626] bg-[#0f0f0f] p-4">
               <span className="text-xs font-bold text-gray-400">Self Bank Transfers</span>
               <div className="font-mono text-xl font-bold text-white mt-1">
-                {formatCurrency(augSummary.totalTransfers, currencySymbol)}
+                {formatCurrency(curSummary.totalTransfers, currencySymbol)}
               </div>
               <p className="text-[11px] text-gray-500 mt-1">
                 HDFC to ICICI account transfers excluded from lifestyle expense calculations.
@@ -396,7 +398,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             <div className="rounded-xl border border-blue-500/20 bg-blue-600/10 p-4">
               <span className="text-xs font-bold text-blue-300">Mutual Fund SIPs / Assets</span>
               <div className="font-mono text-xl font-bold text-blue-400 mt-1">
-                {formatCurrency(augSummary.totalInvestments, currencySymbol)}
+                {formatCurrency(curSummary.totalInvestments, currencySymbol)}
               </div>
               <p className="text-[11px] text-gray-400 mt-1">
                 Zerodha Coin SIP counted toward wealth generation instead of consumption.
@@ -406,7 +408,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             <div className="rounded-xl border border-[#262626] bg-[#0f0f0f] p-4">
               <span className="text-xs font-bold text-gray-400">ATM Cash Stash</span>
               <div className="font-mono text-xl font-bold text-white mt-1">
-                {formatCurrency(augSummary.totalCashWithdrawal, currencySymbol)}
+                {formatCurrency(curSummary.totalCashWithdrawal, currencySymbol)}
               </div>
               <p className="text-[11px] text-gray-500 mt-1">
                 Physical emergency cash reserve kept on hand.

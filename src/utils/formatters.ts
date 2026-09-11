@@ -64,6 +64,32 @@ export function getMonthName(monthStr: string): string {
   }
 }
 
+/**
+ * Returns current month string in 'YYYY-MM' format (e.g. '2026-09')
+ */
+export function getCurrentMonth(): string {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  return `${yyyy}-${mm}`;
+}
+
+/**
+ * Returns previous month string in 'YYYY-MM' format relative to given month (or current)
+ */
+export function getPreviousMonth(monthStr?: string): string {
+  const base = monthStr && monthStr !== 'all' ? monthStr : getCurrentMonth();
+  try {
+    const [yearPart, monthPart] = base.split('-');
+    const prevDate = new Date(parseInt(yearPart, 10), parseInt(monthPart, 10) - 2, 1);
+    const yyyy = prevDate.getFullYear();
+    const mm = String(prevDate.getMonth() + 1).padStart(2, '0');
+    return `${yyyy}-${mm}`;
+  } catch (e) {
+    return '2026-08';
+  }
+}
+
 export function getRelativeTime(dateStr: string): string {
   try {
     const now = new Date();

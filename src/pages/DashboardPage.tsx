@@ -5,7 +5,7 @@ interface DashboardPageProps {
   currentMonth: string;
   currencySymbol: string;
   onNavigate: (view: string) => void;
-  onOpenAddModal: () => void;
+  onOpenAddModal: (friendDebtMode?: { type: 'lent' | 'borrowed'; friendName?: string }) => void;
   onOpenBeforeSpend: () => void;
   onOpenAskMoney: () => void;
   onOpenScanReceipt: () => void;

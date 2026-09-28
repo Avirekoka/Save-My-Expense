@@ -187,9 +187,13 @@ export const StatementsView: React.FC<StatementsViewProps> = ({
       return;
     }
 
+    const activeUid =
+      storageService.getCurrentUserId() ||
+      (storageService.isDemoUser() ? 'usr_main_demo' : 'usr_authenticated');
+
     const txsToSave: Transaction[] = selectedRows.map((r) => ({
       id: `tx_imp_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
-      userId: 'usr_main_demo',
+      userId: activeUid,
       amount: r.amount,
       type: r.type,
       merchant: r.merchant,
@@ -268,11 +272,11 @@ export const StatementsView: React.FC<StatementsViewProps> = ({
       {!previewRows.length ? (
         /* Upload / Paste Area */
         <div className="space-y-5 sm:space-y-6">
-          {/* Tab Selector */}
-          <div className="flex border-b border-[#262626]">
+          {/* Tab Selector (Sticky while scrolling, preserving tab positions) */}
+          <div className="z-20 flex border-b border-[#262626] bg-[#0a0a0a]/95 backdrop-blur-md pt-2 pb-0 -mt-2">
             <button
               onClick={() => setActiveTab('upload')}
-              className={`flex items-center gap-2 pb-3 px-4 text-xs font-semibold border-b-2 transition ${
+              className={`flex items-center gap-2 pb-3 px-4 text-xs font-semibold border-b-2 transition cursor-pointer ${
                 activeTab === 'upload'
                   ? 'border-blue-500 text-blue-400'
                   : 'border-transparent text-gray-400 hover:text-gray-200'
@@ -283,7 +287,7 @@ export const StatementsView: React.FC<StatementsViewProps> = ({
             </button>
             <button
               onClick={() => setActiveTab('paste')}
-              className={`flex items-center gap-2 pb-3 px-4 text-xs font-semibold border-b-2 transition ${
+              className={`flex items-center gap-2 pb-3 px-4 text-xs font-semibold border-b-2 transition cursor-pointer ${
                 activeTab === 'paste'
                   ? 'border-blue-500 text-blue-400'
                   : 'border-transparent text-gray-400 hover:text-gray-200'
@@ -558,7 +562,7 @@ export const StatementsView: React.FC<StatementsViewProps> = ({
                             updated[idx].merchant = e.target.value;
                             setPreviewRows(updated);
                           }}
-                          className="rounded-lg border border-[#262626] bg-[#0f0f0f] px-2 py-1 text-white hover:border-[#444] focus:border-blue-500 focus:outline-hidden"
+                          className="min-w-[140px] w-full rounded-lg border border-[#262626] bg-[#0f0f0f] px-2 py-1 text-white hover:border-[#444] focus:border-blue-500 focus:outline-hidden"
                         />
                       </td>
                       <td className="py-3 px-4">
@@ -569,7 +573,7 @@ export const StatementsView: React.FC<StatementsViewProps> = ({
                             updated[idx].categoryId = e.target.value;
                             setPreviewRows(updated);
                           }}
-                          className="rounded-lg border border-[#262626] bg-[#0f0f0f] px-2 py-1 text-xs text-gray-200 focus:border-blue-500 focus:outline-hidden"
+                          className="min-w-[130px] rounded-lg border border-[#262626] bg-[#0f0f0f] px-2 py-1 text-xs text-gray-200 focus:border-blue-500 focus:outline-hidden"
                         >
                           {categories.map((c) => (
                             <option key={c.id} value={c.id}>

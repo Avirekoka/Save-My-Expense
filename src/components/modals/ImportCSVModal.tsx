@@ -209,9 +209,13 @@ export const ImportCSVModal: React.FC<ImportCSVModalProps> = ({
       return;
     }
 
+    const activeUid =
+      storageService.getCurrentUserId() ||
+      (storageService.isDemoUser() ? 'usr_main_demo' : 'usr_authenticated');
+
     const txsToSave: Transaction[] = selectedRows.map((r) => ({
       id: `tx_imp_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      userId: 'usr_main_demo',
+      userId: activeUid,
       amount: r.amount,
       type: r.type,
       merchant: r.merchant,

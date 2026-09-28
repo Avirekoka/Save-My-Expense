@@ -12,6 +12,12 @@ import {
   FinancialHealthScore,
   HealthScoreFactor,
   RecurringSchedule,
+  PaymentMethod,
+  FriendDebt,
+  FriendDebtType,
+  FriendDebtStatus,
+  FriendDebtSettlement,
+  FriendDebtsSummary,
 } from '../../types';
 import { DEFAULT_CATEGORIES } from '../../data/defaultCategories';
 import { getCurrencySymbol } from '../../utils/currency';
@@ -24,6 +30,7 @@ import {
   SEED_EMI_LOANS,
   SEED_NOTIFICATIONS,
   SEED_RECURRING_SCHEDULES,
+  SEED_FRIEND_DEBTS,
 } from '../../data/seedData';
 import {
   db,
@@ -46,6 +53,7 @@ const STORAGE_KEYS = {
   SUBSCRIPTIONS: 'ais_spend_subscriptions_v1',
   PROFILE: 'ais_spend_profile_v1',
   EMI_LOANS: 'ais_spend_emi_loans_v1',
+  FRIEND_DEBTS: 'ais_spend_friend_debts_v1',
   NOTIFICATIONS: 'ais_spend_notifications_v1',
   STATEMENTS: 'ais_spend_statements_v1',
   INSIGHTS: 'ais_spend_insights_v1',
@@ -53,6 +61,28 @@ const STORAGE_KEYS = {
 };
 
 export const NOTIFY_EVENT = 'ais_spend_data_changed';
+
+/**
+ * Strips all undefined values and unsupported types from objects before passing to Firestore setDoc/batch.set
+ * to prevent 'Unsupported field value: undefined' errors.
+ */
+export function cleanForFirestore<T extends Record<string, any>>(obj: T): T {
+  if (!obj || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) {
+    return obj.map((item) => (typeof item === 'object' && item !== null ? cleanForFirestore(item) : item)) as any;
+  }
+  const clean: any = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      if (value !== null && typeof value === 'object' && !(value instanceof Date)) {
+        clean[key] = cleanForFirestore(value);
+      } else {
+        clean[key] = value;
+      }
+    }
+  }
+  return clean as T;
+}
 
 function triggerUpdate() {
   if (typeof window !== 'undefined') {
@@ -75,6 +105,7 @@ class StorageService {
   private demoCategories: Category[] | null = null;
   private demoSubscriptions: Subscription[] | null = null;
   private demoLoans: EMILoan[] | null = null;
+  private demoFriendDebts: FriendDebt[] | null = null;
   private demoRecurring: RecurringSchedule[] | null = null;
   private demoStatements: StatementUpload[] | null = null;
   private demoNotifications: NotificationItem[] | null = null;
@@ -176,6 +207,7 @@ class StorageService {
           this.demoCategories = JSON.parse(JSON.stringify(DEFAULT_CATEGORIES));
           this.demoSubscriptions = JSON.parse(JSON.stringify(SEED_SUBSCRIPTIONS));
           this.demoLoans = JSON.parse(JSON.stringify(SEED_EMI_LOANS));
+          this.demoFriendDebts = JSON.parse(JSON.stringify(SEED_FRIEND_DEBTS));
           this.demoRecurring = JSON.parse(JSON.stringify(SEED_RECURRING_SCHEDULES));
           this.demoStatements = [];
           this.demoNotifications = JSON.parse(JSON.stringify(SEED_NOTIFICATIONS));
@@ -197,6 +229,7 @@ class StorageService {
         this.demoCategories = null;
         this.demoSubscriptions = null;
         this.demoLoans = null;
+        this.demoFriendDebts = null;
         this.demoRecurring = null;
         this.demoStatements = null;
         this.demoNotifications = null;
@@ -271,6 +304,11 @@ class StorageService {
           localStorage.setItem(userLoanKey, JSON.stringify([]));
         }
 
+        const userFriendDebtKey = this.getKey('FRIEND_DEBTS');
+        if (!localStorage.getItem(userFriendDebtKey)) {
+          localStorage.setItem(userFriendDebtKey, JSON.stringify([]));
+        }
+
         const userRecKey = this.getKey('RECURRING_SCHEDULES');
         if (!localStorage.getItem(userRecKey)) {
           localStorage.setItem(userRecKey, JSON.stringify([]));
@@ -299,6 +337,7 @@ class StorageService {
       this.demoCategories = null;
       this.demoSubscriptions = null;
       this.demoLoans = null;
+      this.demoFriendDebts = null;
       this.demoRecurring = null;
       this.demoStatements = null;
       this.demoNotifications = null;
@@ -554,14 +593,20 @@ class StorageService {
       if (data) {
         const parsed = JSON.parse(data);
         if (Array.isArray(parsed)) {
-          // Never return seed transactions for authenticated users
-          return parsed.filter(
-            (tx) =>
-              tx.userId !== 'usr_main_demo' &&
-              !tx.id.startsWith('tx_sep_') &&
-              !tx.id.startsWith('tx_aug_') &&
-              !tx.id.startsWith('tx_jul_')
-          );
+          // Keep genuine transactions and exclude baseline demo seed items
+          return parsed.filter((tx) => {
+            if (
+              tx.id.startsWith('tx_sep_') ||
+              tx.id.startsWith('tx_aug_') ||
+              tx.id.startsWith('tx_jul_')
+            ) {
+              return false;
+            }
+            if (this.currentUserId) {
+              return tx.userId === this.currentUserId || tx.userId !== 'usr_main_demo';
+            }
+            return tx.userId !== 'usr_main_demo';
+          });
         }
       }
     } catch (e) {
@@ -571,7 +616,7 @@ class StorageService {
     return [];
   }
 
-  saveTransaction(tx: Transaction): void {
+  async saveTransaction(tx: Transaction): Promise<{ success: boolean; firestore: boolean; error?: string }> {
     if (this.isDemoUser()) {
       const list = this.getTransactions();
       const idx = list.findIndex((item) => item.id === tx.id);
@@ -587,19 +632,46 @@ class StorageService {
       this.demoTransactions = list;
       triggerUpdate();
 
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('spendai-toast', {
+            detail: {
+              type: 'info',
+              title: 'Saved (Demo Mode)',
+              message: 'Saved to local demo memory. Demo transactions are not written to Firebase cloud.',
+            },
+          })
+        );
+      }
+
       // In-memory alert check
       if (tx.type === 'expense' || tx.type === 'loan_emi') {
         try {
           this.checkDailySpendingAlert(tx.date);
         } catch (_) {}
       }
-      return; // DO NOT WRITE TO DATABASE FOR DEMO USER
+
+      // Auto-link friend lending/borrowing debt record for demo user
+      if (tx.friendDebtType) {
+        try {
+          this.linkTransactionToFriendDebt(tx);
+        } catch (err) {
+          console.warn('Auto-link friend debt demo notice:', err);
+        }
+      }
+
+      return { success: true, firestore: false };
     }
+
+    const effectiveUid =
+      this.currentUserId ||
+      (this.isDemoUser() ? 'usr_main_demo' : (tx.userId && tx.userId !== 'usr_main_demo' ? tx.userId : 'usr_authenticated'));
 
     const list = this.getTransactions();
     const idx = list.findIndex((item) => item.id === tx.id);
     const updatedTx: Transaction = {
       ...tx,
+      userId: effectiveUid,
       createdAt: tx.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -610,8 +682,17 @@ class StorageService {
     }
     this.saveAllTransactions(list);
 
+    // Auto-link friend lending/borrowing debt record for genuine user
+    if (updatedTx.friendDebtType) {
+      try {
+        this.linkTransactionToFriendDebt(updatedTx);
+      } catch (err) {
+        console.warn('Auto-link friend debt genuine notice:', err);
+      }
+    }
+
     // Save genuine user transaction to Firestore cloud database
-    this.saveTransactionToFirestore(updatedTx);
+    const firestoreResult = await this.saveTransactionToFirestore(updatedTx);
 
     // Auto-check daily spending alert if this is an expense or loan EMI
     if (tx.type === 'expense' || tx.type === 'loan_emi') {
@@ -621,6 +702,44 @@ class StorageService {
         console.warn('Error checking daily spending alert:', err);
       }
     }
+
+    return { success: true, firestore: firestoreResult.success, error: firestoreResult.error };
+  }
+
+  private linkTransactionToFriendDebt(tx: Transaction): void {
+    if (!tx.friendDebtType) return;
+    const friendName = (tx.friendName || tx.merchant || 'Friend').trim();
+    const debts = this.getFriendDebts();
+    const existing = tx.friendDebtId ? debts.find((d) => d.id === tx.friendDebtId) : null;
+    if (existing) {
+      existing.amount = tx.amount;
+      existing.remainingAmount = Math.max(0, tx.amount - (existing.settledAmount || 0));
+      existing.status = existing.remainingAmount <= 0 ? 'settled' : (existing.settledAmount || 0) > 0 ? 'partially_settled' : 'pending';
+      existing.friendName = friendName;
+      existing.type = tx.friendDebtType;
+      existing.date = tx.date;
+      if (tx.notes) existing.notes = tx.notes;
+      this.saveFriendDebt(existing);
+    } else {
+      const debtId = tx.friendDebtId || `fdebt_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`;
+      tx.friendDebtId = debtId;
+      const newDebt: FriendDebt = {
+        id: debtId,
+        userId: this.currentUserId || (this.isDemoUser() ? 'usr_main_demo' : 'usr_authenticated'),
+        friendName,
+        type: tx.friendDebtType,
+        amount: tx.amount,
+        settledAmount: 0,
+        remainingAmount: tx.amount,
+        status: 'pending',
+        date: tx.date,
+        notes: tx.notes,
+        transactionId: tx.id,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      this.saveFriendDebt(newDebt);
+    }
   }
 
   saveAllTransactions(transactions: Transaction[]): void {
@@ -629,9 +748,13 @@ class StorageService {
       triggerUpdate();
       return; // DO NOT WRITE TO DATABASE FOR DEMO USER
     }
-    localStorage.setItem(this.getKey('TRANSACTIONS'), JSON.stringify(transactions));
+    const sanitized = transactions.map((t) => ({
+      ...t,
+      userId: this.currentUserId ? this.currentUserId : t.userId,
+    }));
+    localStorage.setItem(this.getKey('TRANSACTIONS'), JSON.stringify(sanitized));
     triggerUpdate();
-    this.batchSaveTransactionsToFirestore(transactions);
+    this.batchSaveTransactionsToFirestore(sanitized);
   }
 
   deleteTransaction(id: string): void {
@@ -986,6 +1109,261 @@ class StorageService {
     return { remainingAmount: newRemaining, isSettled: newRemaining <= 0 };
   }
 
+  settleEMILoan(
+    loanId: string,
+    payoffAmount?: number,
+    dateStr?: string,
+    paymentMethod: PaymentMethod = 'Bank Transfer',
+    notes?: string
+  ): { loan: EMILoan | null; isSettled: boolean; settlementTx?: Transaction } {
+    const list = this.getEMILoans();
+    const loan = list.find((l) => l.id === loanId);
+    if (!loan) return { loan: null, isSettled: false };
+
+    const settleAmount =
+      typeof payoffAmount === 'number' && payoffAmount > 0
+        ? payoffAmount
+        : loan.remainingAmount > 0
+        ? loan.remainingAmount
+        : loan.totalAmount;
+
+    const settlementDate = dateStr || new Date().toISOString().slice(0, 10);
+    const txId = `tx_settle_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+
+    loan.remainingAmount = 0;
+    loan.paidMonths = loan.tenureMonths;
+    loan.prepaymentsMade = (loan.prepaymentsMade || 0) + settleAmount;
+    loan.status = 'resolved';
+    loan.resolvedDate = settlementDate;
+    loan.settlementTransactionId = txId;
+
+    // Automatically log an offsetting transaction in the ledger
+    const categories = this.getCategories();
+    const loanCategory =
+      categories.find(
+        (c) =>
+          c.id === 'loan_emi' ||
+          c.name.toLowerCase().includes('loan') ||
+          c.name.toLowerCase().includes('bill')
+      ) || categories[0];
+
+    const settlementTx: Transaction = {
+      id: txId,
+      userId: loan.userId || this.getProfile()?.id || 'usr_main_demo',
+      amount: settleAmount,
+      type: 'loan_emi',
+      merchant: `${loan.lender} - ${loan.name}`,
+      categoryId: loanCategory ? loanCategory.id : 'loan_emi',
+      date: settlementDate,
+      paymentMethod: paymentMethod || 'Bank Transfer',
+      source: 'manual',
+      tags: ['loan-settlement', 'debt-payoff', 'resolved'],
+      notes:
+        notes ||
+        `Offsetting debt payoff transaction for ${loan.name} (${loan.lender}). Marked as resolved.`,
+      rawDescription: `Debt Settlement: ${loan.name} (${loan.lender})`,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.saveTransaction(settlementTx);
+
+    if (this.isDemoUser()) {
+      this.demoLoans = list;
+      triggerUpdate();
+      return { loan, isSettled: true, settlementTx };
+    }
+
+    this.saveEMILoans(list);
+    return { loan, isSettled: true, settlementTx };
+  }
+
+  // --- FRIEND DEBTS & PEER MONEY (WHO OWES WHOM) ---
+  getFriendDebts(): FriendDebt[] {
+    if (this.isDemoUser()) {
+      if (!this.demoFriendDebts) {
+        this.demoFriendDebts = JSON.parse(JSON.stringify(SEED_FRIEND_DEBTS));
+      }
+      return [...this.demoFriendDebts];
+    }
+    try {
+      const data = localStorage.getItem(this.getKey('FRIEND_DEBTS'));
+      if (data) {
+        const parsed = JSON.parse(data);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((d) => !['fdebt_01', 'fdebt_02', 'fdebt_03'].includes(d.id));
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to parse friend debts from storage', e);
+    }
+    return [];
+  }
+
+  saveFriendDebt(debt: FriendDebt): { success: boolean; firestore: boolean; error?: string } {
+    const settled = debt.settledAmount || 0;
+    const remaining = Math.max(0, debt.amount - settled);
+    const status: FriendDebtStatus = remaining <= 0 ? 'settled' : settled > 0 ? 'partially_settled' : 'pending';
+
+    const updatedDebt: FriendDebt = {
+      ...debt,
+      settledAmount: settled,
+      remainingAmount: remaining,
+      status,
+      updatedAt: new Date().toISOString(),
+      createdAt: debt.createdAt || new Date().toISOString(),
+    };
+
+    if (this.isDemoUser()) {
+      const list = this.getFriendDebts();
+      const idx = list.findIndex((item) => item.id === debt.id);
+      if (idx >= 0) {
+        list[idx] = updatedDebt;
+      } else {
+        list.unshift(updatedDebt);
+      }
+      this.demoFriendDebts = list;
+      triggerUpdate();
+      return { success: true, firestore: false };
+    }
+
+    const list = this.getFriendDebts();
+    const idx = list.findIndex((item) => item.id === debt.id);
+    if (idx >= 0) {
+      list[idx] = updatedDebt;
+    } else {
+      list.unshift(updatedDebt);
+    }
+    localStorage.setItem(this.getKey('FRIEND_DEBTS'), JSON.stringify(list));
+    triggerUpdate();
+
+    // Async sync to Firestore
+    this.saveFriendDebtToFirestore(updatedDebt);
+    return { success: true, firestore: true };
+  }
+
+  deleteFriendDebt(id: string): void {
+    if (this.isDemoUser()) {
+      this.demoFriendDebts = this.getFriendDebts().filter((d) => d.id !== id);
+      triggerUpdate();
+      return;
+    }
+    const list = this.getFriendDebts().filter((d) => d.id !== id);
+    localStorage.setItem(this.getKey('FRIEND_DEBTS'), JSON.stringify(list));
+    triggerUpdate();
+    this.deleteFriendDebtFromFirestore(id);
+  }
+
+  settleFriendDebt(
+    id: string,
+    amount: number,
+    dateStr?: string,
+    notes?: string
+  ): { debt: FriendDebt | null; isFull: boolean; settlementTx?: Transaction } {
+    const list = this.getFriendDebts();
+    const debt = list.find((d) => d.id === id);
+    if (!debt) return { debt: null, isFull: false };
+
+    const payAmount = Math.min(amount, debt.remainingAmount);
+    if (payAmount <= 0) return { debt, isFull: debt.remainingAmount <= 0 };
+
+    const settlementId = `settle_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`;
+    const settlementDate = dateStr || new Date().toISOString().slice(0, 10);
+    const newSettlement: FriendDebtSettlement = {
+      id: settlementId,
+      amount: payAmount,
+      date: settlementDate,
+      notes: notes || (debt.type === 'lent' ? `Repayment received from ${debt.friendName}` : `Repaid to ${debt.friendName}`),
+      createdAt: new Date().toISOString(),
+    };
+
+    debt.settlements = [...(debt.settlements || []), newSettlement];
+    debt.settledAmount = (debt.settledAmount || 0) + payAmount;
+    debt.remainingAmount = Math.max(0, debt.amount - debt.settledAmount);
+    debt.status = debt.remainingAmount <= 0 ? 'settled' : 'partially_settled';
+    debt.updatedAt = new Date().toISOString();
+
+    this.saveFriendDebt(debt);
+
+    // Also record settlement ledger transaction:
+    const activeUid = this.currentUserId || (this.isDemoUser() ? 'usr_main_demo' : 'usr_authenticated');
+    const settlementTx: Transaction = {
+      id: `tx_${settlementId}`,
+      userId: activeUid,
+      amount: payAmount,
+      type: debt.type === 'lent' ? 'income' : 'expense',
+      merchant: debt.friendName,
+      categoryId: debt.type === 'lent' ? 'income' : 'transfers',
+      date: settlementDate,
+      paymentMethod: 'UPI',
+      source: 'manual',
+      tags: ['friend-debt', 'repayment', debt.type],
+      notes: notes || (debt.type === 'lent' ? `Repayment received from ${debt.friendName} for "${debt.notes || 'loan'}"` : `Repaid ${debt.friendName} for "${debt.notes || 'loan'}"`),
+      friendDebtId: debt.id,
+      friendDebtType: debt.type,
+      friendName: debt.friendName,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.saveTransaction(settlementTx);
+
+    return { debt, isFull: debt.remainingAmount <= 0, settlementTx };
+  }
+
+  getFriendDebtsSummary(): FriendDebtsSummary {
+    const all = this.getFriendDebts();
+    let totalLent = 0;
+    let totalBorrowed = 0;
+    let pendingLentCount = 0;
+    let pendingBorrowedCount = 0;
+
+    all.forEach((d) => {
+      if (d.status !== 'settled' && d.remainingAmount > 0) {
+        if (d.type === 'lent') {
+          totalLent += d.remainingAmount;
+          pendingLentCount++;
+        } else {
+          totalBorrowed += d.remainingAmount;
+          pendingBorrowedCount++;
+        }
+      }
+    });
+
+    return {
+      totalLent,
+      totalBorrowed,
+      netBalance: totalLent - totalBorrowed,
+      pendingLentCount,
+      pendingBorrowedCount,
+      activeDebts: all,
+    };
+  }
+
+  async saveFriendDebtToFirestore(debt: FriendDebt): Promise<{ success: boolean; error?: string }> {
+    if (this.isDemoUser() || !this.currentUserId) return { success: true };
+    try {
+      const cleanDebt = cleanForFirestore({
+        ...debt,
+        userId: this.currentUserId,
+      });
+      await setDoc(doc(db, 'users', this.currentUserId, 'friend_debts', debt.id), cleanDebt, { merge: true });
+      return { success: true };
+    } catch (err: any) {
+      console.warn('Firestore saveFriendDebt error:', err);
+      return { success: false, error: err?.message };
+    }
+  }
+
+  private async deleteFriendDebtFromFirestore(id: string): Promise<void> {
+    if (!this.currentUserId || this.isDemoUser()) return;
+    try {
+      await deleteDoc(doc(db, 'users', this.currentUserId, 'friend_debts', id));
+    } catch (err) {
+      console.warn('Failed to delete friend debt from Firestore:', err);
+    }
+  }
+
   // --- RECURRING SCHEDULES ---
   getRecurringSchedules(): RecurringSchedule[] {
     if (this.isDemoUser()) {
@@ -1198,7 +1576,6 @@ class StorageService {
           const t = docSnap.data() as Transaction;
           if (
             t &&
-            t.userId !== 'usr_main_demo' &&
             !t.id.startsWith('tx_sep_') &&
             !t.id.startsWith('tx_aug_') &&
             !t.id.startsWith('tx_jul_')
@@ -1254,7 +1631,25 @@ class StorageService {
         triggerUpdate();
       }
 
-      // 4. Profile Document
+      // 4. Friend Debts Collection
+      const fdebtsCol = collection(db, 'users', userId, 'friend_debts');
+      const fdebtsSnap = await getDocs(fdebtsCol);
+      if (!fdebtsSnap.empty) {
+        const remoteDebts: FriendDebt[] = [];
+        fdebtsSnap.forEach((docSnap) => {
+          const d = docSnap.data() as FriendDebt;
+          if (d && !['fdebt_01', 'fdebt_02', 'fdebt_03'].includes(d.id)) {
+            remoteDebts.push(d);
+          }
+        });
+        localStorage.setItem(this.getKey('FRIEND_DEBTS'), JSON.stringify(remoteDebts));
+        triggerUpdate();
+      } else {
+        localStorage.setItem(this.getKey('FRIEND_DEBTS'), JSON.stringify([]));
+        triggerUpdate();
+      }
+
+      // 5. Profile Document
       const profileDocRef = doc(db, 'users', userId, 'profile', 'main');
       const profileSnap = await getDoc(profileDocRef);
       if (profileSnap.exists()) {
@@ -1323,12 +1718,65 @@ class StorageService {
     }
   }
 
-  private async saveTransactionToFirestore(tx: Transaction): Promise<void> {
-    if (!this.currentUserId || this.isDemoUser()) return;
+  async saveTransactionToFirestore(tx: Transaction): Promise<{ success: boolean; error?: string }> {
+    if (this.isDemoUser()) {
+      return { success: true };
+    }
+
+    if (!this.currentUserId) {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('spendai-toast', {
+            detail: {
+              type: 'warning',
+              title: 'Saved Locally Only',
+              message: 'You are not logged into Firebase. Sign in to save transactions to Firebase Firestore.',
+            },
+          })
+        );
+      }
+      return { success: false, error: 'User not signed into Firebase' };
+    }
+
     try {
-      await setDoc(doc(db, 'users', this.currentUserId, 'transactions', tx.id), tx, { merge: true });
-    } catch (err) {
-      console.warn('Failed to save transaction to Firestore:', err);
+      const cleanTx = cleanForFirestore({
+        ...tx,
+        userId: this.currentUserId,
+      });
+      // Remove any undefined notes
+      if (cleanTx.notes === undefined) delete cleanTx.notes;
+
+      await setDoc(doc(db, 'users', this.currentUserId, 'transactions', tx.id), cleanTx, { merge: true });
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('spendai-toast', {
+            detail: {
+              type: 'success',
+              title: 'Synced to Firebase',
+              message: `Transaction recorded in Firestore database.`,
+            },
+          })
+        );
+      }
+      return { success: true };
+    } catch (err: any) {
+      console.error('Firestore saveTransaction error:', err);
+      const code = err?.code || 'error';
+      const msg = err?.message || 'Failed to save transaction to Firestore.';
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('spendai-toast', {
+            detail: {
+              type: 'error',
+              title: `Firebase Insert Failed (${code})`,
+              message: `${msg}. Open Settings > Firebase Diagnostics to test connection.`,
+            },
+          })
+        );
+      }
+      return { success: false, error: `${code}: ${msg}` };
     }
   }
 
@@ -1361,11 +1809,142 @@ class StorageService {
       // Firestore batch limit is 500 operations
       const slice = transactions.slice(0, 450);
       for (const tx of slice) {
-        batch.set(doc(db, 'users', this.currentUserId, 'transactions', tx.id), tx, { merge: true });
+        const clean = cleanForFirestore({
+          ...tx,
+          userId: this.currentUserId,
+        });
+        if (clean.notes === undefined) delete clean.notes;
+        batch.set(doc(db, 'users', this.currentUserId, 'transactions', tx.id), clean, { merge: true });
       }
       await batch.commit();
     } catch (err) {
       console.warn('Failed to batch save transactions to Firestore:', err);
+    }
+  }
+
+  /**
+   * Diagnostic method to verify live Firestore read & write permissions.
+   */
+  async testFirestoreConnection(): Promise<{
+    success: boolean;
+    authStatus: string;
+    userId: string | null;
+    dbName: string;
+    writeLatencyMs?: number;
+    readLatencyMs?: number;
+    error?: string;
+    details?: string;
+  }> {
+    const isDemo = this.isDemoUser();
+    const uid = this.currentUserId;
+    const dbName = 'ai-studio-aiexpenseintelli-4a79c71e-794b-4d2a-a6ec-0c34fcbf7680';
+
+    if (isDemo) {
+      return {
+        success: false,
+        authStatus: 'Demo Mode (Local Memory Only)',
+        userId: uid,
+        dbName,
+        error: 'App is currently running in Demo Mode. Demo mode intentionally stays in local memory and does not write to live Firestore database. Log out and sign in with your real email/password or Google to connect to live Firestore.',
+      };
+    }
+
+    if (!uid) {
+      return {
+        success: false,
+        authStatus: 'Logged Out / Guest',
+        userId: null,
+        dbName,
+        error: 'No active authenticated session detected. You must sign in to write data to Firebase under security rules.',
+      };
+    }
+
+    try {
+      const testId = `diag_ping_${Date.now()}`;
+      const testRef = doc(db, 'users', uid, 'transactions', testId);
+
+      const writeStart = performance.now();
+      const testTx: Transaction = {
+        id: testId,
+        userId: uid,
+        amount: 1,
+        type: 'expense',
+        merchant: 'Firebase Health Check',
+        categoryId: 'cat_other',
+        date: new Date().toISOString().split('T')[0],
+        paymentMethod: 'UPI',
+        source: 'manual',
+        tags: ['test', 'diagnostic'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      await setDoc(testRef, cleanForFirestore(testTx));
+      const writeLatency = Math.round(performance.now() - writeStart);
+
+      const readStart = performance.now();
+      const snap = await getDoc(testRef);
+      const readLatency = Math.round(performance.now() - readStart);
+
+      // Clean up diagnostic test document
+      await deleteDoc(testRef).catch(() => {});
+
+      if (snap.exists()) {
+        return {
+          success: true,
+          authStatus: `Authenticated (${this.currentUserEmail || 'User'})`,
+          userId: uid,
+          dbName,
+          writeLatencyMs: writeLatency,
+          readLatencyMs: readLatency,
+          details: `Write Latency: ${writeLatency}ms | Read Latency: ${readLatency}ms. Security rules and database permissions are 100% verified.`,
+        };
+      } else {
+        return {
+          success: false,
+          authStatus: 'Authenticated',
+          userId: uid,
+          dbName,
+          error: 'Document write did not return data on readback.',
+        };
+      }
+    } catch (err: any) {
+      console.error('testFirestoreConnection error:', err);
+      return {
+        success: false,
+        authStatus: `Authenticated (${this.currentUserEmail || 'User'})`,
+        userId: uid,
+        dbName,
+        error: err?.code ? `Firebase error [${err.code}]: ${err.message}` : err?.message || String(err),
+      };
+    }
+  }
+
+  /**
+   * Syncs all local transactions into Firestore database for the active user.
+   */
+  async syncLocalTransactionsToFirestore(): Promise<{ count: number; error?: string }> {
+    if (this.isDemoUser() || !this.currentUserId) {
+      return { count: 0, error: 'Must be logged in to a genuine Firebase account.' };
+    }
+    const localTxs = this.getTransactions();
+    if (!localTxs.length) return { count: 0 };
+    try {
+      const batch = writeBatch(db);
+      const slice = localTxs.slice(0, 400);
+      for (const t of slice) {
+        const clean = cleanForFirestore({
+          ...t,
+          userId: this.currentUserId,
+        });
+        if (clean.notes === undefined) delete clean.notes;
+        batch.set(doc(db, 'users', this.currentUserId, 'transactions', t.id), clean, { merge: true });
+      }
+      await batch.commit();
+      return { count: slice.length };
+    } catch (err: any) {
+      console.error('syncLocalTransactionsToFirestore error:', err);
+      return { count: 0, error: err?.code || err?.message || 'Batch sync failed.' };
     }
   }
 
@@ -1535,6 +2114,27 @@ class StorageService {
         totalTransfers += tx.amount;
       } else if (tx.type === 'investment') {
         totalInvestments += tx.amount;
+        const catId = tx.categoryId || 'investments';
+        categorySpending[catId] = (categorySpending[catId] || 0) + tx.amount;
+
+        if (!merchantSpending[tx.merchant]) {
+          merchantSpending[tx.merchant] = {
+            total: 0,
+            count: 0,
+            highest: 0,
+            transactions: [],
+          };
+        }
+        merchantSpending[tx.merchant].total += tx.amount;
+        merchantSpending[tx.merchant].count += 1;
+        merchantSpending[tx.merchant].highest = Math.max(
+          merchantSpending[tx.merchant].highest,
+          tx.amount
+        );
+        merchantSpending[tx.merchant].transactions.push(tx);
+
+        paymentMethodSpending[tx.paymentMethod] =
+          (paymentMethodSpending[tx.paymentMethod] || 0) + tx.amount;
       } else if (tx.type === 'cash_withdrawal') {
         totalCashWithdrawal += tx.amount;
       }

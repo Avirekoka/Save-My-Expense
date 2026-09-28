@@ -41,6 +41,10 @@ interface DailyExpenseHeatmapMatrixProps {
 }
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const MONTH_NAMES = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
 
 export const DailyExpenseHeatmapMatrix: React.FC<DailyExpenseHeatmapMatrixProps> = ({
   currentMonth,
@@ -71,6 +75,12 @@ export const DailyExpenseHeatmapMatrix: React.FC<DailyExpenseHeatmapMatrixProps>
 
   // Display options
   const [viewFormat, setViewFormat] = useState<'calendar' | 'compact'>('calendar');
+  const [showViewExplainer, setShowViewExplainer] = useState<boolean>(false);
+
+  // Drag selection refs to prevent mousedown from clobbering normal clicks
+  const isMouseDownRef = useRef<boolean>(false);
+  const dragAnchorDateRef = useRef<string | null>(null);
+  const didDragRef = useRef<boolean>(false);
 
   // Search & Filter inside Transaction History
   const [historySearchQuery, setHistorySearchQuery] = useState<string>('');
@@ -233,9 +243,23 @@ export const DailyExpenseHeatmapMatrix: React.FC<DailyExpenseHeatmapMatrixProps>
   };
 
   // Color classes for concentration levels (dark mode default, index.css auto-maps for light theme)
-  const getConcentrationColorClasses = (level: number, isSelected: boolean) => {
+  const getConcentrationColorClasses = (
+    level: number,
+    isSelected: boolean,
+    isStart?: boolean,
+    isEnd?: boolean,
+    isAnchor?: boolean
+  ) => {
+    if (isAnchor) {
+      return 'bg-blue-600 text-white font-bold ring-2 ring-amber-400 ring-offset-2 ring-offset-[#0d0d0d] shadow-lg shadow-amber-500/40 scale-[1.04] z-20 animate-pulse';
+    }
+
     if (isSelected) {
-      return 'bg-blue-600 text-white font-bold ring-2 ring-blue-400 ring-offset-2 ring-offset-[#0d0d0d] shadow-lg shadow-blue-600/30 scale-[1.02] z-10';
+      if (isStart || isEnd) {
+        return 'bg-blue-600 text-white font-bold ring-2 ring-blue-400 ring-offset-2 ring-offset-[#0d0d0d] shadow-lg shadow-blue-600/40 scale-[1.02] z-10';
+      }
+      // Consecutive range middle days
+      return 'bg-blue-600/75 text-white font-semibold border-y border-blue-400/50 shadow-xs z-5';
     }
 
     switch (level) {
@@ -261,83 +285,89 @@ export const DailyExpenseHeatmapMatrix: React.FC<DailyExpenseHeatmapMatrixProps>
   };
 
   const isRangeStart = (dateStr: string) => selectedStartDate === dateStr;
-  const isRangeEnd = (dateStr: string) => selectedEndDate === dateStr;
+  const isRangeEnd = (dateStr: string) => (selectedEndDate || selectedStartDate) === dateStr;
 
-  // Handle Day Click Selection
+  // Handle Day Click Selection (works cleanly on both desktop clicks and mobile touch taps)
   const handleDayClick = (dateStr: string, e?: React.MouseEvent) => {
+    // If a mouse drag operation was just performed, prevent click handler from clobbering it
+    if (didDragRef.current) {
+      didDragRef.current = false;
+      return;
+    }
+
     const isShiftKey = e?.shiftKey;
 
     if (selectionMode === 'single' && !isShiftKey) {
-      // Single day mode
+      // Single day mode: clicking selected day toggles it off; clicking any other day selects it
       if (selectedStartDate === dateStr && selectedEndDate === dateStr) {
-        // Toggle off if already selected
         setSelectedStartDate(null);
         setSelectedEndDate(null);
+        if (onSelectDateRange) onSelectDateRange('', '');
       } else {
         setSelectedStartDate(dateStr);
         setSelectedEndDate(dateStr);
+        if (onSelectDateRange) onSelectDateRange(dateStr, dateStr);
         scrollToHistory();
       }
     } else {
-      // Range mode or Shift+click
+      // Consecutive Range mode or Shift+click
       if (!selectedStartDate || !isRangeAnchorSet) {
-        // First click sets anchor
+        // Step 1: Set anchor date
         setSelectedStartDate(dateStr);
         setSelectedEndDate(dateStr);
         setIsRangeAnchorSet(true);
-        scrollToHistory();
+        // On mobile/desktop, DO NOT auto-scroll away on step 1 so user can easily see and tap step 2!
       } else {
-        // Second click completes range from min to max
+        // Step 2: Complete consecutive range
         const start = dateStr < selectedStartDate ? dateStr : selectedStartDate;
         const end = dateStr > selectedStartDate ? dateStr : selectedStartDate;
         setSelectedStartDate(start);
         setSelectedEndDate(end);
         setIsRangeAnchorSet(false);
+        if (onSelectDateRange) {
+          onSelectDateRange(start, end);
+        }
         scrollToHistory();
       }
     }
-
-    if (onSelectDateRange) {
-      onSelectDateRange(dateStr, dateStr);
-    }
   };
 
-  // Mouse Drag selection handlers for desktop swipe
-  const handleMouseDown = (dateStr: string) => {
-    setIsDragging(true);
-    setDragStartDate(dateStr);
-    setSelectedStartDate(dateStr);
-    setSelectedEndDate(dateStr);
+  // Safe Mouse Drag selection for desktop swipe (does not clobber normal clicks)
+  const handleDayMouseDown = (dateStr: string, e: React.MouseEvent) => {
+    if (e.button !== 0) return; // Left click only
+    isMouseDownRef.current = true;
+    dragAnchorDateRef.current = dateStr;
+    didDragRef.current = false;
   };
 
-  const handleMouseEnter = (dateStr: string) => {
+  const handleDayMouseEnter = (dateStr: string) => {
     setHoveredDate(dateStr);
-    if (isDragging && dragStartDate) {
-      const start = dateStr < dragStartDate ? dateStr : dragStartDate;
-      const end = dateStr > dragStartDate ? dateStr : dragStartDate;
+    // Only start drag selection if mouse button is held down and moved to a DIFFERENT date cell
+    if (isMouseDownRef.current && dragAnchorDateRef.current && dragAnchorDateRef.current !== dateStr) {
+      didDragRef.current = true;
+      setIsDragging(true);
+      const start = dateStr < dragAnchorDateRef.current ? dateStr : dragAnchorDateRef.current;
+      const end = dateStr > dragAnchorDateRef.current ? dateStr : dragAnchorDateRef.current;
       setSelectedStartDate(start);
       setSelectedEndDate(end);
-    }
-  };
-
-  const handleMouseUp = () => {
-    if (isDragging) {
-      setIsDragging(false);
-      setDragStartDate(null);
-      scrollToHistory();
+      setIsRangeAnchorSet(false);
     }
   };
 
   useEffect(() => {
     const handleGlobalMouseUp = () => {
-      if (isDragging) {
-        setIsDragging(false);
-        setDragStartDate(null);
+      if (isMouseDownRef.current) {
+        isMouseDownRef.current = false;
+        if (didDragRef.current) {
+          setIsDragging(false);
+          scrollToHistory();
+        }
+        dragAnchorDateRef.current = null;
       }
     };
     window.addEventListener('mouseup', handleGlobalMouseUp);
     return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
-  }, [isDragging]);
+  }, []);
 
   const scrollToHistory = () => {
     setTimeout(() => {
@@ -427,6 +457,36 @@ export const DailyExpenseHeatmapMatrix: React.FC<DailyExpenseHeatmapMatrixProps>
     const end = `${activeMonth}-${String(daysInMonth).padStart(2, '0')}`;
     setSelectedStartDate(start);
     setSelectedEndDate(end);
+    setIsRangeAnchorSet(false);
+    scrollToHistory();
+  };
+
+  const selectFirstHalf = () => {
+    const start = `${activeMonth}-01`;
+    const end = `${activeMonth}-15`;
+    setSelectedStartDate(start);
+    setSelectedEndDate(end);
+    setIsRangeAnchorSet(false);
+    scrollToHistory();
+  };
+
+  const selectSecondHalf = () => {
+    const start = `${activeMonth}-16`;
+    const end = `${activeMonth}-${String(daysInMonth).padStart(2, '0')}`;
+    setSelectedStartDate(start);
+    setSelectedEndDate(end);
+    setIsRangeAnchorSet(false);
+    scrollToHistory();
+  };
+
+  const selectDayRange = (fromDay: number, toDay: number) => {
+    const minDay = Math.max(1, Math.min(fromDay, toDay));
+    const maxDay = Math.min(daysInMonth, Math.max(fromDay, toDay));
+    const start = `${activeMonth}-${String(minDay).padStart(2, '0')}`;
+    const end = `${activeMonth}-${String(maxDay).padStart(2, '0')}`;
+    setSelectedStartDate(start);
+    setSelectedEndDate(end);
+    setIsRangeAnchorSet(false);
     scrollToHistory();
   };
 
@@ -601,31 +661,105 @@ export const DailyExpenseHeatmapMatrix: React.FC<DailyExpenseHeatmapMatrixProps>
               </button>
             )}
 
-            {/* Grid View Toggle */}
-            <div className="flex rounded-xl border border-[#262626] bg-[#0d0d0d] p-1 text-xs">
+            {/* Grid View Toggle with Comparison Info Button */}
+            <div className="flex items-center gap-1.5">
+              <div className="flex rounded-xl border border-[#262626] bg-[#0d0d0d] p-1 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setViewFormat('calendar')}
+                  className={`rounded-lg px-2.5 py-1 font-medium transition cursor-pointer flex items-center gap-1.5 ${
+                    viewFormat === 'calendar'
+                      ? 'bg-blue-600 text-white font-bold shadow-xs'
+                      : 'text-gray-400 hover:text-white'
+                  }`}
+                  title="Calendar View: 7-day weekday columns (Mon-Sun) with offset empty cells"
+                >
+                  <CalendarIcon size={13} />
+                  <span>Calendar</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewFormat('compact')}
+                  className={`rounded-lg px-2.5 py-1 font-medium transition cursor-pointer flex items-center gap-1.5 ${
+                    viewFormat === 'compact'
+                      ? 'bg-blue-600 text-white font-bold shadow-xs'
+                      : 'text-gray-400 hover:text-white'
+                  }`}
+                  title="Strip View: Continuous 1-31 chronological timeline without weekday offsets"
+                >
+                  <Layers size={13} />
+                  <span>Strip</span>
+                </button>
+              </div>
+
               <button
-                onClick={() => setViewFormat('calendar')}
-                className={`rounded-lg px-2.5 py-1 font-medium transition cursor-pointer ${
-                  viewFormat === 'calendar'
-                    ? 'bg-blue-600 text-white font-bold'
-                    : 'text-gray-400 hover:text-white'
+                type="button"
+                onClick={() => setShowViewExplainer((prev) => !prev)}
+                className={`rounded-xl border p-1.5 text-xs transition cursor-pointer flex items-center gap-1 ${
+                  showViewExplainer
+                    ? 'border-blue-500/50 bg-blue-500/20 text-blue-300'
+                    : 'border-[#262626] bg-[#0d0d0d] text-gray-400 hover:text-white'
                 }`}
+                title="What is the difference between Calendar and Strip view?"
               >
-                Calendar
-              </button>
-              <button
-                onClick={() => setViewFormat('compact')}
-                className={`rounded-lg px-2.5 py-1 font-medium transition cursor-pointer ${
-                  viewFormat === 'compact'
-                    ? 'bg-blue-600 text-white font-bold'
-                    : 'text-gray-400 hover:text-white'
-                }`}
-              >
-                Strip
+                <Info size={14} />
+                <span className="hidden sm:inline text-[11px] font-medium">View Guide</span>
               </button>
             </div>
           </div>
         </div>
+
+        {/* View Explainer Card: Calendar vs. Strip */}
+        {showViewExplainer && (
+          <div className="rounded-xl border border-blue-500/30 bg-blue-950/20 p-3.5 my-3 text-xs text-gray-300 space-y-2.5 animate-in fade-in">
+            <div className="flex items-center justify-between font-semibold text-white">
+              <span className="flex items-center gap-1.5 text-blue-400">
+                <Info size={15} /> Difference Between Calendar & Strip View
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowViewExplainer(false)}
+                className="text-gray-400 hover:text-white p-0.5 rounded cursor-pointer"
+                title="Close"
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[11px] pt-1">
+              <div className={`p-3 rounded-xl border ${viewFormat === 'calendar' ? 'border-blue-500/50 bg-blue-900/25 ring-1 ring-blue-500/30' : 'border-[#262626] bg-[#0d0d0d]'}`}>
+                <div className="font-bold text-white flex items-center justify-between gap-1.5 mb-1">
+                  <span className="flex items-center gap-1.5">
+                    <CalendarIcon size={14} className="text-blue-400" />
+                    Calendar View (7-Day Weekday Grid)
+                  </span>
+                  {viewFormat === 'calendar' && <span className="text-[9px] bg-blue-600 text-white px-1.5 py-0.5 rounded-full font-bold">Active</span>}
+                </div>
+                <p className="text-gray-300 leading-relaxed">
+                  Lays out days across <strong>Monday through Sunday</strong> columns, matching a real monthly wall calendar with blank offset padding before the 1st.
+                </p>
+                <div className="mt-2 text-blue-300 font-medium">
+                  🎯 <strong>Best for:</strong> Lifestyle analysis — spotting <em>weekend splurges vs. weekday routine expenses</em> (e.g. Saturday dining, Sunday shopping).
+                </div>
+              </div>
+
+              <div className={`p-3 rounded-xl border ${viewFormat === 'compact' ? 'border-blue-500/50 bg-blue-900/25 ring-1 ring-blue-500/30' : 'border-[#262626] bg-[#0d0d0d]'}`}>
+                <div className="font-bold text-white flex items-center justify-between gap-1.5 mb-1">
+                  <span className="flex items-center gap-1.5">
+                    <Layers size={14} className="text-blue-400" />
+                    Strip View (Continuous 1–31 Timeline)
+                  </span>
+                  {viewFormat === 'compact' && <span className="text-[9px] bg-blue-600 text-white px-1.5 py-0.5 rounded-full font-bold">Active</span>}
+                </div>
+                <p className="text-gray-300 leading-relaxed">
+                  Lays out every day of the month sequentially in a compact, seamless horizontal strip with zero blank offset spaces.
+                </p>
+                <div className="mt-2 text-blue-300 font-medium">
+                  🎯 <strong>Best for:</strong> Pay-cycle cash flow — tracking <em>monthly burn velocity</em> (e.g. early month rent/EMI spike, mid-month plateau, end-of-month restraint).
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Monthly Summary Strip */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 py-4 border-b border-[#212121]">
@@ -696,24 +830,44 @@ export const DailyExpenseHeatmapMatrix: React.FC<DailyExpenseHeatmapMatrixProps>
             {/* Quick consecutive presets */}
             <div className="flex flex-wrap items-center gap-1 pl-1">
               <button
+                type="button"
                 onClick={selectToday}
                 className="rounded-lg border border-[#262626] bg-[#1a1a1a] px-2 py-1 text-[11px] text-gray-300 hover:text-white hover:border-gray-600 transition cursor-pointer"
               >
                 Today
               </button>
               <button
+                type="button"
                 onClick={selectLast7Days}
                 className="rounded-lg border border-[#262626] bg-[#1a1a1a] px-2 py-1 text-[11px] text-gray-300 hover:text-white hover:border-gray-600 transition cursor-pointer"
               >
-                Last 7 Days
+                Last 7D
               </button>
               <button
+                type="button"
                 onClick={selectLastWeekend}
                 className="rounded-lg border border-[#262626] bg-[#1a1a1a] px-2 py-1 text-[11px] text-gray-300 hover:text-white hover:border-gray-600 transition cursor-pointer"
               >
                 Weekend
               </button>
               <button
+                type="button"
+                onClick={selectFirstHalf}
+                className="rounded-lg border border-[#262626] bg-[#1a1a1a] px-2 py-1 text-[11px] text-gray-300 hover:text-white hover:border-gray-600 transition cursor-pointer"
+                title="Days 1 to 15"
+              >
+                1-15 (H1)
+              </button>
+              <button
+                type="button"
+                onClick={selectSecondHalf}
+                className="rounded-lg border border-[#262626] bg-[#1a1a1a] px-2 py-1 text-[11px] text-gray-300 hover:text-white hover:border-gray-600 transition cursor-pointer"
+                title="Days 16 to month end"
+              >
+                16-End (H2)
+              </button>
+              <button
+                type="button"
                 onClick={selectFullMonth}
                 className="rounded-lg border border-[#262626] bg-[#1a1a1a] px-2 py-1 text-[11px] text-gray-300 hover:text-white hover:border-gray-600 transition cursor-pointer"
               >
@@ -721,6 +875,7 @@ export const DailyExpenseHeatmapMatrix: React.FC<DailyExpenseHeatmapMatrixProps>
               </button>
               {selectedStartDate && (
                 <button
+                  type="button"
                   onClick={clearSelection}
                   className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-2 py-1 text-[11px] text-rose-300 hover:bg-rose-500/20 transition cursor-pointer flex items-center gap-1"
                 >
@@ -758,6 +913,60 @@ export const DailyExpenseHeatmapMatrix: React.FC<DailyExpenseHeatmapMatrixProps>
           </div>
         </div>
 
+        {/* Mobile / Stepper Quick Day Picker Row */}
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 pb-2 text-xs border-t border-[#1a1a1a]">
+          <div className="flex items-center gap-2 text-gray-400">
+            <CalendarRange size={13} className="text-blue-400" />
+            <span className="text-[11px] font-medium">Quick Pick Days:</span>
+            <div className="flex items-center gap-1">
+              <select
+                aria-label="Select start day"
+                value={selectedStartDate && selectedStartDate.startsWith(activeMonth) ? Number(selectedStartDate.slice(8, 10)) : 1}
+                onChange={(e) => {
+                  const startDay = Number(e.target.value);
+                  const currentEndDay = selectedEndDate && selectedEndDate.startsWith(activeMonth) ? Number(selectedEndDate.slice(8, 10)) : startDay;
+                  selectDayRange(startDay, Math.max(startDay, currentEndDay));
+                }}
+                className="rounded-md border border-[#262626] bg-[#111] px-2 py-0.5 text-xs text-white cursor-pointer focus:outline-none focus:border-blue-500"
+              >
+                {Array.from({ length: daysInMonth }).map((_, i) => (
+                  <option key={`start-${i + 1}`} value={i + 1}>
+                    Day {i + 1}
+                  </option>
+                ))}
+              </select>
+              <span className="text-gray-500">to</span>
+              <select
+                aria-label="Select end day"
+                value={selectedEndDate && selectedEndDate.startsWith(activeMonth) ? Number(selectedEndDate.slice(8, 10)) : (selectedStartDate && selectedStartDate.startsWith(activeMonth) ? Number(selectedStartDate.slice(8, 10)) : daysInMonth)}
+                onChange={(e) => {
+                  const endDay = Number(e.target.value);
+                  const currentStartDay = selectedStartDate && selectedStartDate.startsWith(activeMonth) ? Number(selectedStartDate.slice(8, 10)) : 1;
+                  selectDayRange(Math.min(currentStartDay, endDay), endDay);
+                }}
+                className="rounded-md border border-[#262626] bg-[#111] px-2 py-0.5 text-xs text-white cursor-pointer focus:outline-none focus:border-blue-500"
+              >
+                {Array.from({ length: daysInMonth }).map((_, i) => (
+                  <option key={`end-${i + 1}`} value={i + 1}>
+                    Day {i + 1}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {selectedStartDate && (
+            <div className="text-[11px] text-blue-400 font-medium">
+              Active: <strong className="text-white">{selectedStartDate.slice(8, 10)}</strong>
+              {selectedEndDate && selectedEndDate !== selectedStartDate ? (
+                <> to <strong className="text-white">{selectedEndDate.slice(8, 10)} {MONTH_NAMES[monthNum - 1]}</strong> ({selectedRangeStats?.daysCount} days)</>
+              ) : (
+                <> {MONTH_NAMES[monthNum - 1]} (Single Day)</>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* Informative Hint Banner */}
         <div className="flex items-center justify-between text-[11px] text-gray-400 bg-[#0c0c0c] border border-[#1f1f1f] rounded-xl px-3 py-2 my-2">
           <div className="flex items-center gap-2">
@@ -765,9 +974,9 @@ export const DailyExpenseHeatmapMatrix: React.FC<DailyExpenseHeatmapMatrixProps>
             <span>
               {selectionMode === 'range'
                 ? isRangeAnchorSet
-                  ? '📌 Anchor set. Click on an end day to complete your consecutive range selection.'
-                  : '💡 Click a start day, then click an end day to select all consecutive days. You can also drag across days.'
-                : '💡 Click any day cell to open its transaction history. Hold Shift while clicking to select consecutive days.'}
+                  ? '📌 Anchor day selected. Tap any second day on the calendar to select all days in between.'
+                  : '💡 Range Mode: Tap a start day, then tap an end day to select the full consecutive range.'
+                : '💡 Single Day Mode: Tap any day to inspect its transactions. (Switch to "Consecutive Range" to pick multiple days).'}
             </span>
           </div>
           {selectedStartDate && selectedEndDate && (
@@ -776,6 +985,41 @@ export const DailyExpenseHeatmapMatrix: React.FC<DailyExpenseHeatmapMatrixProps>
             </span>
           )}
         </div>
+
+        {/* Interactive Anchor Alert Banner (Mobile-Friendly) */}
+        {isRangeAnchorSet && selectedStartDate && (
+          <div className="rounded-xl border border-amber-500/50 bg-amber-500/10 p-3 my-2 text-xs text-amber-200 flex flex-wrap items-center justify-between gap-3 animate-in fade-in">
+            <div className="flex items-center gap-2">
+              <span className="relative flex h-2.5 w-2.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500" />
+              </span>
+              <span>
+                <strong>Start Day Pinned:</strong> <span className="font-mono text-white font-bold">{formatDate(selectedStartDate)}</span>. Now tap your <strong>End Day</strong> on the calendar below.
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsRangeAnchorSet(false);
+                  setSelectedEndDate(selectedStartDate);
+                  scrollToHistory();
+                }}
+                className="rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 px-2.5 py-1 text-xs font-semibold text-amber-200 cursor-pointer transition"
+              >
+                Select 1 Day Only
+              </button>
+              <button
+                type="button"
+                onClick={clearSelection}
+                className="rounded-lg bg-black/40 hover:bg-black/60 border border-white/10 px-2.5 py-1 text-xs font-semibold text-gray-300 cursor-pointer transition"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Heatmap Matrix Display */}
         {viewFormat === 'calendar' ? (
@@ -814,21 +1058,22 @@ export const DailyExpenseHeatmapMatrix: React.FC<DailyExpenseHeatmapMatrixProps>
                 const isSelected = isDateSelected(dateStr);
                 const isStart = isRangeStart(dateStr);
                 const isEnd = isRangeEnd(dateStr);
+                const isAnchor = isRangeAnchorSet && isStart;
                 const isToday = dateStr === new Date().toISOString().slice(0, 10);
 
-                const colorClass = getConcentrationColorClasses(concentrationLevel, isSelected);
+                const colorClass = getConcentrationColorClasses(concentrationLevel, isSelected, isStart, isEnd, isAnchor);
 
                 return (
                   <button
                     key={dateStr}
                     type="button"
                     onClick={(e) => handleDayClick(dateStr, e)}
-                    onMouseDown={() => handleMouseDown(dateStr)}
-                    onMouseEnter={() => handleMouseEnter(dateStr)}
+                    onMouseDown={(e) => handleDayMouseDown(dateStr, e)}
+                    onMouseEnter={() => handleDayMouseEnter(dateStr)}
                     title={`${dateStr} (${dayData?.weekday})
 Daily Expense: ${formatCurrency(expense, currencySymbol)}
 ${txCount} transactions${dayData?.topMerchant ? `\nTop: ${dayData.topMerchant}` : ''}`}
-                    className={`relative aspect-square rounded-xl p-1.5 sm:p-2.5 flex flex-col justify-between text-left transition-all duration-150 cursor-pointer ${colorClass} ${
+                    className={`relative aspect-square rounded-xl p-1.5 sm:p-2.5 flex flex-col justify-between text-left transition-all duration-150 cursor-pointer touch-manipulation select-none active:scale-95 ${colorClass} ${
                       isSelected ? 'shadow-md' : 'hover:scale-[1.03] hover:z-10'
                     }`}
                   >
@@ -850,11 +1095,15 @@ ${txCount} transactions${dayData?.topMerchant ? `\nTop: ${dayData.topMerchant}` 
                             className="h-1.5 w-1.5 rounded-full bg-emerald-400 ring-2 ring-emerald-500/30"
                           />
                         )}
-                        {isSelected && (isStart || isEnd) && (
+                        {isAnchor ? (
+                          <span className="text-[8px] sm:text-[9px] font-extrabold uppercase px-1 rounded-sm bg-amber-400 text-black animate-pulse">
+                            Pick End
+                          </span>
+                        ) : isSelected && (isStart || isEnd) ? (
                           <span className="hidden sm:inline-block text-[9px] font-extrabold uppercase px-1 rounded-sm bg-white/25 text-white">
                             {isStart && isEnd ? 'Day' : isStart ? 'Start' : 'End'}
                           </span>
-                        )}
+                        ) : null}
                       </div>
                     </div>
 
@@ -892,21 +1141,28 @@ ${txCount} transactions${dayData?.topMerchant ? `\nTop: ${dayData.topMerchant}` 
               const txCount = dayData?.txCount || 0;
               const concentrationLevel = getConcentrationLevel(expense);
               const isSelected = isDateSelected(dateStr);
-              const colorClass = getConcentrationColorClasses(concentrationLevel, isSelected);
+              const isStart = isRangeStart(dateStr);
+              const isEnd = isRangeEnd(dateStr);
+              const isAnchor = isRangeAnchorSet && isStart;
+              const colorClass = getConcentrationColorClasses(concentrationLevel, isSelected, isStart, isEnd, isAnchor);
 
               return (
                 <button
                   key={dateStr}
                   type="button"
                   onClick={(e) => handleDayClick(dateStr, e)}
-                  onMouseDown={() => handleMouseDown(dateStr)}
-                  onMouseEnter={() => handleMouseEnter(dateStr)}
-                  title={`${dateStr}: ${formatCurrency(expense, currencySymbol)} (${txCount} tx)`}
-                  className={`rounded-xl p-2 text-center transition-all cursor-pointer ${colorClass} ${
+                  onMouseDown={(e) => handleDayMouseDown(dateStr, e)}
+                  onMouseEnter={() => handleDayMouseEnter(dateStr)}
+                  title={`${dateStr} (${dayData?.weekday}): ${formatCurrency(expense, currencySymbol)} (${txCount} tx)`}
+                  className={`rounded-xl p-2 text-center transition-all cursor-pointer touch-manipulation select-none active:scale-95 ${colorClass} ${
                     isSelected ? 'scale-105' : 'hover:scale-105'
                   }`}
                 >
-                  <div className="text-[10px] opacity-70 font-semibold">Day {dayNum}</div>
+                  <div className="text-[10px] opacity-80 font-semibold flex items-center justify-center gap-1">
+                    <span className="text-[9px] uppercase opacity-75">{dayData?.weekday.slice(0, 2)}</span>
+                    <span>{dayNum}</span>
+                    {isAnchor && <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-ping" />}
+                  </div>
                   <div className="font-mono text-xs font-bold mt-0.5">
                     {expense > 0 ? (
                       expense >= 1000 ? `₹${Math.round(expense / 1000)}k` : `₹${Math.round(expense)}`

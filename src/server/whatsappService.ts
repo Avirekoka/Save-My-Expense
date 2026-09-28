@@ -474,7 +474,7 @@ Tasks:
 6. Infer payment method: "UPI", "Credit Card", "Debit Card", "Cash", "Bank Transfer", "Net Banking". Default to "UPI" for digital spends or "Cash" if cash mentioned.
 7. Assign a realistic confidence score (0-100).`;
 
-  const modelsToTry = ['gemini-2.5-flash', 'gemini-3.7-flash'];
+  const modelsToTry = ['gemini-2.5-flash', 'gemini-flash-latest'];
 
   for (const modelName of modelsToTry) {
     try {

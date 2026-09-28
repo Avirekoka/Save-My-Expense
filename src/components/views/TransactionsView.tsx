@@ -407,8 +407,8 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
         </div>
       )}
 
-      {/* Top Header & Actions */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
+      {/* Top Header & Actions with Sticky Table / Timeline View Tabs */}
+      <div className="z-20 -mx-1 px-1 py-2.5 bg-[#0a0a0a]/95 backdrop-blur-md border-b border-[#262626]/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 transition-all">
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
@@ -717,7 +717,7 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
 
       {/* Main Content Area */}
       {filteredTransactions.length === 0 ? (
-        <div className="rounded-xl border border-[#262626] bg-[#141414] p-12 text-center">
+        <div className="rounded-xl border border-[#262626] bg-[#141414] p-8 sm:p-12 text-center">
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-[#1a1a1a] text-gray-500">
             <Search size={24} />
           </div>
@@ -727,9 +727,136 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({
           </p>
         </div>
       ) : viewMode === 'table' ? (
-        /* Table View */
+        /* Responsive Table & Mobile Cards View */
         <div className="overflow-hidden rounded-xl border border-[#262626] bg-[#141414] shadow-xs">
-          <div className="overflow-x-auto">
+          {/* Mobile Card List (< md breakpoint) */}
+          <div className="block md:hidden divide-y divide-[#212121]">
+            <div className="p-3 bg-[#0f0f0f] border-b border-[#262626] flex items-center justify-between text-xs text-gray-400">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={isAllFilteredSelected}
+                  onChange={toggleSelectAllFiltered}
+                  className="h-4 w-4 rounded border-[#333] text-blue-500 focus:ring-blue-500 bg-[#0f0f0f] cursor-pointer align-middle"
+                />
+                <span className="font-semibold text-gray-300">Select All ({filteredTransactions.length})</span>
+              </label>
+              <span className="text-[11px] text-gray-500 font-mono">
+                {selectedTxIds.size} selected
+              </span>
+            </div>
+
+            {filteredTransactions.map((tx) => {
+              const cat = categories.find((c) => c.id === tx.categoryId);
+              const isSelected = selectedTxIds.has(tx.id);
+              return (
+                <div
+                  key={tx.id}
+                  onClick={() => toggleSelectTx(tx.id)}
+                  className={`p-3.5 space-y-2.5 transition cursor-pointer ${
+                    isSelected ? 'bg-blue-600/10' : 'hover:bg-[#1a1a1a]'
+                  }`}
+                >
+                  {/* Row 1: Checkbox, Date, Type Badge & Quick Actions */}
+                  <div className="flex items-center justify-between gap-2" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center gap-2.5">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleSelectTx(tx.id)}
+                        className="h-4 w-4 rounded border-[#333] text-blue-500 focus:ring-blue-500 bg-[#0f0f0f] cursor-pointer"
+                      />
+                      <span className="font-mono text-xs text-gray-400">{formatDate(tx.date)}</span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <span
+                        className={`rounded-md px-1.5 py-0.5 text-[9px] font-bold uppercase ${
+                          tx.type === 'income'
+                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                            : tx.type === 'refund'
+                            ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20'
+                            : tx.type === 'transfer'
+                            ? 'bg-gray-500/10 text-gray-300 border border-gray-500/20'
+                            : tx.type === 'investment'
+                            ? 'bg-blue-600/10 text-blue-400 border border-blue-500/20'
+                            : tx.type === 'loan_emi'
+                            ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                            : 'bg-[#1a1a1a] text-gray-400 border border-[#262626]'
+                        }`}
+                      >
+                        {tx.type}
+                      </span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onOpenAddModal(tx);
+                        }}
+                        title="Edit transaction"
+                        className="rounded-lg p-1.5 text-gray-400 hover:bg-[#262626] hover:text-blue-400 transition"
+                      >
+                        <Edit2 size={14} />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteClick(tx);
+                        }}
+                        title="Delete record"
+                        className="rounded-lg p-1.5 text-gray-400 hover:bg-[#262626] hover:text-rose-400 transition"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Row 2: Merchant, Category, and Details */}
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start gap-2.5 min-w-0">
+                      <div className="mt-0.5 shrink-0">
+                        <CategoryIcon category={cat} categoryId={tx.categoryId} size={16} />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-bold text-sm text-white truncate">{tx.merchant}</div>
+                        <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                          <span className="inline-flex items-center rounded-md bg-[#1a1a1a] border border-[#262626] px-1.5 py-0.2 text-[10px] font-medium text-gray-300">
+                            {cat ? cat.name : tx.categoryId}
+                          </span>
+                          <span className="text-[10px] text-gray-400 font-mono">
+                            {tx.paymentMethod}
+                          </span>
+                        </div>
+                        {tx.notes && (
+                          <div className="text-[11px] text-gray-400 italic mt-1 line-clamp-1">
+                            Note: {tx.notes}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Amount */}
+                    <div className="text-right shrink-0">
+                      <div
+                        className={`font-mono text-base font-extrabold ${
+                          tx.type === 'income'
+                            ? 'text-emerald-400'
+                            : tx.type === 'refund'
+                            ? 'text-blue-400'
+                            : 'text-white'
+                        }`}
+                      >
+                        {tx.type === 'income' ? '+' : tx.type === 'refund' ? '↺ ' : '-'}
+                        {formatCurrency(tx.amount, currencySymbol)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Desktop & Tablet Table (>= md breakpoint) */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left text-xs text-gray-300">
               <thead className="border-b border-[#262626] bg-[#0f0f0f] font-semibold uppercase tracking-wider text-gray-500 text-[10px]">
                 <tr>

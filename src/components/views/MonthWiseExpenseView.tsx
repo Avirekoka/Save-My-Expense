@@ -272,87 +272,88 @@ export const MonthWiseExpenseView: React.FC<MonthWiseExpenseViewProps> = ({
       </div>
 
       {/* Lifetime Stats KPI Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-5">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-5">
         {/* Lifetime Outflow */}
-        <div className="rounded-xl border border-[#262626] bg-[#141414] p-3.5 sm:p-4.5 lg:p-5 shadow-xs">
+        <div className="rounded-xl border border-[#262626] bg-[#141414] p-3 sm:p-4.5 lg:p-5 shadow-xs min-w-0">
           <div className="flex items-center justify-between text-xs text-gray-400">
-            <span className="font-medium uppercase tracking-wider text-[10px]">
-              Total Lifetime Outflow
+            <span className="font-medium uppercase tracking-wider text-[10px] truncate">
+              Total Outflow
             </span>
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-rose-500/10 text-rose-400 border border-rose-500/20">
+            <div className="flex h-6 w-6 sm:h-7 sm:w-7 items-center justify-center rounded-lg bg-rose-500/10 text-rose-400 border border-rose-500/20 shrink-0">
               <TrendingDown size={14} />
             </div>
           </div>
-          <div className="mt-2 text-xl sm:text-2xl font-bold font-mono text-white">
+          <div className="mt-2 text-lg sm:text-2xl font-bold font-mono text-white truncate" title={formatCurrency(lifetimeStats.lifetimeOutflow, currencySymbol)}>
             {formatCurrency(lifetimeStats.lifetimeOutflow, currencySymbol)}
           </div>
-          <div className="mt-1 text-[11px] text-gray-400">
-            Across {lifetimeStats.totalMonths} calendar months
+          <div className="mt-1 text-[11px] text-gray-400 truncate">
+            Across {lifetimeStats.totalMonths} months
           </div>
         </div>
 
         {/* Lifetime Inflow */}
-        <div className="rounded-xl border border-[#262626] bg-[#141414] p-3.5 sm:p-4.5 lg:p-5 shadow-xs">
+        <div className="rounded-xl border border-[#262626] bg-[#141414] p-3 sm:p-4.5 lg:p-5 shadow-xs min-w-0">
           <div className="flex items-center justify-between text-xs text-gray-400">
-            <span className="font-medium uppercase tracking-wider text-[10px]">
-              Total Lifetime Inflow
+            <span className="font-medium uppercase tracking-wider text-[10px] truncate">
+              Total Inflow
             </span>
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+            <div className="flex h-6 w-6 sm:h-7 sm:w-7 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 shrink-0">
               <TrendingUp size={14} />
             </div>
           </div>
-          <div className="mt-2 text-xl sm:text-2xl font-bold font-mono text-emerald-400">
+          <div className="mt-2 text-lg sm:text-2xl font-bold font-mono text-emerald-400 truncate" title={formatCurrency(lifetimeStats.lifetimeInflow, currencySymbol)}>
             {formatCurrency(lifetimeStats.lifetimeInflow, currencySymbol)}
           </div>
-          <div className="mt-1 text-[11px] text-gray-400">
+          <div className="mt-1 text-[11px] text-gray-400 truncate">
             Earned income & refunds
           </div>
         </div>
 
         {/* Net Savings */}
-        <div className="rounded-xl border border-[#262626] bg-[#141414] p-3.5 sm:p-4.5 lg:p-5 shadow-xs">
+        <div className="rounded-xl border border-[#262626] bg-[#141414] p-3 sm:p-4.5 lg:p-5 shadow-xs min-w-0">
           <div className="flex items-center justify-between text-xs text-gray-400">
-            <span className="font-medium uppercase tracking-wider text-[10px]">
-              Cumulative Savings
+            <span className="font-medium uppercase tracking-wider text-[10px] truncate">
+              Net Savings
             </span>
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/20">
+            <div className="flex h-6 w-6 sm:h-7 sm:w-7 items-center justify-center rounded-lg bg-blue-500/10 text-blue-400 border border-blue-500/20 shrink-0">
               <Wallet size={14} />
             </div>
           </div>
           <div
-            className={`mt-2 text-xl sm:text-2xl font-bold font-mono ${
+            className={`mt-2 text-lg sm:text-2xl font-bold font-mono truncate ${
               lifetimeStats.netLifetime >= 0 ? 'text-blue-400' : 'text-rose-400'
             }`}
+            title={formatCurrency(lifetimeStats.netLifetime, currencySymbol)}
           >
             {formatCurrency(lifetimeStats.netLifetime, currencySymbol)}
           </div>
-          <div className="mt-1 text-[11px] text-gray-400">
+          <div className="mt-1 text-[11px] text-gray-400 truncate">
             {lifetimeStats.lifetimeInflow > 0
               ? `${(
                   (lifetimeStats.netLifetime / lifetimeStats.lifetimeInflow) *
                   100
-                ).toFixed(1)}% lifetime retention`
-              : 'Lifetime net balance'}
+                ).toFixed(1)}% retention`
+              : 'Lifetime balance'}
           </div>
         </div>
 
         {/* Average Outflow */}
-        <div className="rounded-xl border border-[#262626] bg-[#141414] p-3.5 sm:p-4.5 lg:p-5 shadow-xs">
+        <div className="rounded-xl border border-[#262626] bg-[#141414] p-3 sm:p-4.5 lg:p-5 shadow-xs min-w-0">
           <div className="flex items-center justify-between text-xs text-gray-400">
-            <span className="font-medium uppercase tracking-wider text-[10px]">
-              Avg Monthly Outflow
+            <span className="font-medium uppercase tracking-wider text-[10px] truncate">
+              Avg Outflow
             </span>
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-purple-500/10 text-purple-400 border border-purple-500/20">
+            <div className="flex h-6 w-6 sm:h-7 sm:w-7 items-center justify-center rounded-lg bg-purple-500/10 text-purple-400 border border-purple-500/20 shrink-0">
               <Receipt size={14} />
             </div>
           </div>
-          <div className="mt-2 text-xl sm:text-2xl font-bold font-mono text-white">
+          <div className="mt-2 text-lg sm:text-2xl font-bold font-mono text-white truncate" title={formatCurrency(lifetimeStats.avgMonthlyOutflow, currencySymbol)}>
             {formatCurrency(lifetimeStats.avgMonthlyOutflow, currencySymbol)}
           </div>
           <div className="mt-1 text-[11px] text-gray-400 truncate">
             {lifetimeStats.peakMonth
               ? `Peak: ${lifetimeStats.peakMonth.monthLabel}`
-              : 'Based on recorded months'}
+              : 'Recorded average'}
           </div>
         </div>
       </div>
@@ -464,13 +465,13 @@ export const MonthWiseExpenseView: React.FC<MonthWiseExpenseViewProps> = ({
                 </div>
 
                 {/* Right: Numbers breakdown */}
-                <div className="flex flex-wrap items-center gap-4 sm:gap-6 lg:gap-8 border-t lg:border-t-0 border-[#222] pt-3 lg:pt-0">
+                <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-3.5 sm:gap-6 lg:gap-8 border-t lg:border-t-0 border-[#222] pt-3.5 lg:pt-0 w-full lg:w-auto">
                   {/* Total Outflow */}
                   <div>
                     <div className="text-[10px] uppercase font-bold text-gray-400">
                       Total Outflow
                     </div>
-                    <div className="text-sm sm:text-base font-bold font-mono text-white mt-0.5">
+                    <div className="text-sm sm:text-base font-bold font-mono text-white mt-0.5 truncate">
                       {formatCurrency(item.totalOutflow, currencySymbol)}
                     </div>
                   </div>
@@ -480,7 +481,7 @@ export const MonthWiseExpenseView: React.FC<MonthWiseExpenseViewProps> = ({
                     <div className="text-[10px] uppercase font-bold text-gray-400">
                       Inflow
                     </div>
-                    <div className="text-sm sm:text-base font-bold font-mono text-emerald-400 mt-0.5">
+                    <div className="text-sm sm:text-base font-bold font-mono text-emerald-400 mt-0.5 truncate">
                       {formatCurrency(item.totalIncome, currencySymbol)}
                     </div>
                   </div>
@@ -491,7 +492,7 @@ export const MonthWiseExpenseView: React.FC<MonthWiseExpenseViewProps> = ({
                       Net Savings
                     </div>
                     <div
-                      className={`text-sm sm:text-base font-bold font-mono mt-0.5 ${
+                      className={`text-sm sm:text-base font-bold font-mono mt-0.5 truncate ${
                         item.netSavings >= 0 ? 'text-blue-400' : 'text-rose-400'
                       }`}
                     >
@@ -501,11 +502,11 @@ export const MonthWiseExpenseView: React.FC<MonthWiseExpenseViewProps> = ({
                   </div>
 
                   {/* Savings Rate */}
-                  <div className="hidden sm:block">
+                  <div>
                     <div className="text-[10px] uppercase font-bold text-gray-400">
                       Savings Rate
                     </div>
-                    <div className="text-sm font-bold text-gray-200 mt-0.5">
+                    <div className="text-sm font-bold text-gray-200 mt-0.5 truncate">
                       {item.savingsRate.toFixed(0)}%
                     </div>
                   </div>
@@ -513,7 +514,7 @@ export const MonthWiseExpenseView: React.FC<MonthWiseExpenseViewProps> = ({
                   {/* Action Button */}
                   <button
                     onClick={() => handleSelectMonthAndGo(item.monthKey)}
-                    className="flex items-center gap-1.5 rounded-lg border border-[#333] bg-[#1a1a1a] px-3.5 py-2 text-xs font-bold text-blue-300 hover:bg-blue-600 hover:text-white transition cursor-pointer ml-auto lg:ml-0 shadow-xs"
+                    className="col-span-2 sm:col-span-1 flex items-center justify-center gap-1.5 rounded-lg border border-[#333] bg-[#1a1a1a] px-3.5 py-2 text-xs font-bold text-blue-300 hover:bg-blue-600 hover:text-white transition cursor-pointer w-full sm:w-auto sm:ml-auto lg:ml-0 shadow-xs"
                   >
                     <span>View Ledger</span>
                     <ChevronRight size={14} />

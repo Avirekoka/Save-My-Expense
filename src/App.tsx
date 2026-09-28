@@ -3,6 +3,7 @@ import { Loader2, Sparkles, ShieldAlert } from 'lucide-react';
 import { Header } from './components/common/Header';
 import { Sidebar } from './components/common/Sidebar';
 import { Footer } from './components/common/Footer';
+import { BottomFooterTabs } from './components/common/BottomFooterTabs';
 import { EmailVerificationBanner } from './components/common/EmailVerificationBanner';
 import { EmailVerificationGate } from './components/common/EmailVerificationGate';
 import { PageLoadingSkeleton } from './components/common/PageLoadingSkeleton';
@@ -63,6 +64,7 @@ function MainAppContent() {
   // Modals state
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
+  const [addModalFriendMode, setAddModalFriendMode] = useState<{ type: 'lent' | 'borrowed'; friendName?: string } | null>(null);
   const [isReceiptScannerOpen, setIsReceiptScannerOpen] = useState<boolean>(false);
   const [scannedReceiptForModal, setScannedReceiptForModal] = useState<ScannedReceiptData | null>(null);
   const [isAskMoneyOpen, setIsAskMoneyOpen] = useState<boolean>(false);
@@ -183,9 +185,15 @@ function MainAppContent() {
     }
   }, [user]);
 
-  const handleOpenAdd = (tx?: Transaction) => {
+  const handleOpenAdd = (arg?: Transaction | { type: 'lent' | 'borrowed'; friendName?: string }) => {
     requireAuthForAction('add or edit transactions', () => {
-      setEditingTransaction(tx || null);
+      if (arg && 'type' in arg && (arg.type === 'lent' || arg.type === 'borrowed') && !('amount' in arg)) {
+        setAddModalFriendMode(arg);
+        setEditingTransaction(null);
+      } else {
+        setAddModalFriendMode(null);
+        setEditingTransaction((arg as Transaction) || null);
+      }
       setScannedReceiptForModal(null);
       setIsAddModalOpen(true);
     });
@@ -289,8 +297,9 @@ function MainAppContent() {
       id="app-root-container"
       className="h-screen h-[100dvh] max-h-screen overflow-hidden bg-[#0a0a0a] text-[#e5e5e5] font-sans flex flex-col selection:bg-blue-600 selection:text-white"
     >
-      {/* Top Header */}
+      {/* Top Header with Synchronized Navigation Tabs */}
       <Header
+        activeView={currentRoute}
         currentMonth={selectedMonth}
         onMonthChange={setSelectedMonth}
         onChangeMonth={setSelectedMonth}
@@ -311,7 +320,7 @@ function MainAppContent() {
       <EmailVerificationBanner />
 
       {/* Main Layout Container */}
-      <div className="flex flex-1 min-h-0 h-full max-h-[calc(100dvh-4rem)] overflow-hidden">
+      <div className="flex flex-1 min-h-0 w-full overflow-hidden">
         {/* Sidebar */}
         <Sidebar
           activeView={currentRoute}
@@ -337,7 +346,7 @@ function MainAppContent() {
         <main
           ref={mainScrollRef}
           id="main-content-scroll"
-          className="flex-1 min-h-0 h-full overflow-y-auto p-4 sm:p-6 lg:p-8 flex flex-col justify-between"
+          className="flex-1 min-h-0 h-full overflow-y-auto p-3.5 sm:p-6 lg:p-8 pb-24 sm:pb-28 lg:pb-28 flex flex-col justify-between"
         >
           <div className="max-w-7xl mx-auto w-full flex-1">
             <Suspense fallback={<PageLoadingSkeleton />}>
@@ -455,6 +464,7 @@ function MainAppContent() {
           </div>
 
           <Footer
+            activeView={currentRoute}
             onNavigate={handleNavigate}
             onOpenAskMoney={handleOpenAskMoney}
             onOpenBeforeSpend={handleOpenBeforeSpend}
@@ -465,16 +475,25 @@ function MainAppContent() {
         </main>
       </div>
 
+      {/* Bottom Tabs - 5 Important Tabs with Central Add Button */}
+      <BottomFooterTabs
+        activeRoute={currentRoute}
+        onNavigate={handleNavigate}
+        onOpenAddModal={() => handleOpenAdd()}
+      />
+
       {/* Global Interactive Modals */}
       <AddTransactionModal
         isOpen={isAddModalOpen}
         onClose={() => {
           setIsAddModalOpen(false);
           setEditingTransaction(null);
+          setAddModalFriendMode(null);
           setScannedReceiptForModal(null);
         }}
         editingTransaction={editingTransaction}
         initialReceiptData={scannedReceiptForModal}
+        initialFriendDebtMode={addModalFriendMode}
         currencySymbol={currencySymbol}
         onSuccess={refreshFinancials}
       />

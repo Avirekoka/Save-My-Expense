@@ -88,6 +88,25 @@
         "linkedAt": { "type": "string" }
       },
       "required": ["phone", "userId"]
+    },
+    "FriendDebt": {
+      "title": "FriendDebt",
+      "description": "Peer-to-peer friend lending and borrowing tracking (who owes whom)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "friendName": { "type": "string" },
+        "friendPhone": { "type": "string" },
+        "type": { "type": "string", "enum": ["lent", "borrowed"] },
+        "amount": { "type": "number" },
+        "settledAmount": { "type": "number" },
+        "remainingAmount": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "partially_settled", "settled"] },
+        "date": { "type": "string" },
+        "dueDate": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "required": ["id", "friendName", "type", "amount", "status", "date"]
     }
   },
   "firestore": {
@@ -106,6 +125,10 @@
     "/users/{userId}/goals/{goalId}": {
       "schema": "Goal",
       "description": "User savings goals"
+    },
+    "/users/{userId}/friend_debts/{debtId}": {
+      "schema": "FriendDebt",
+      "description": "User peer-to-peer friend loans, lent money, and borrowed debts"
     },
     "/whatsapp_messages/{messageId}": {
       "schema": "WhatsAppMessage",

@@ -36,6 +36,7 @@ import { useAuth } from '../../services/firebase/AuthContext';
 import { useScrollLock } from '../../hooks/useScrollLock';
 import { WhatsAppIntegrationCard } from '../whatsapp/WhatsAppIntegrationCard';
 import { ThemeToggleCard } from '../settings/ThemeToggleCard';
+import { FirebaseDiagnosticsCard } from '../settings/FirebaseDiagnosticsCard';
 
 const AVATAR_PRESETS = [
   { id: '1', url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80', label: 'Preset 1' },
@@ -306,9 +307,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           Settings & Data Management
         </h1>
         <p className="text-xs text-gray-400 mt-0.5">
-          Manage your personal profile, currency preferences, daily spending alerts, and financial data.
+          Manage your personal profile, appearance & theme, currency preferences, daily spending alerts, and financial data.
         </p>
       </div>
+
+      {/* Appearance & Visual Theme Settings */}
+      <ThemeToggleCard />
 
       {/* User Profile & Account Card */}
       <div className="rounded-xl border border-[#262626] bg-[#141414] p-5 sm:p-6 shadow-xs">
@@ -627,11 +631,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </form>
       </div>
 
-      {/* Manual Theme & Display Accessibility Selector */}
-      <ThemeToggleCard />
-
       {/* WhatsApp Business Cloud API Webhook Integration & Live Simulator */}
       <WhatsAppIntegrationCard onNavigate={onNavigate} />
+
+      {/* Firebase Firestore Cloud Database Diagnostics & Connection Test */}
+      <FirebaseDiagnosticsCard onOpenAuthModal={onOpenAuthModal} />
 
       {/* Daily Spending Limit & Financial Goal Nudge Setting Card */}
       <div id="daily-spending-alert-settings" className="rounded-xl border border-[#262626] bg-[#141414] p-6 shadow-xs relative overflow-hidden">

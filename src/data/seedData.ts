@@ -7,6 +7,7 @@ import {
   EMILoan,
   NotificationItem,
   RecurringSchedule,
+  FriendDebt,
 } from '../types';
 
 export const SEED_PROFILE: UserProfile = {
@@ -1106,7 +1107,7 @@ export const SEED_EMI_LOANS: EMILoan[] = [
     interestRate: 12.5,
     tenureMonths: 36,
     paidMonths: 22,
-    nextDueDate: '2026-09-10',
+    nextDueDate: '2026-09-27',
     startDate: '2024-11-01',
     color: '#F59E0B',
     notes: 'High interest personal loan. Priority target for early prepayment.',
@@ -1390,6 +1391,75 @@ export const SEED_RECURRING_SCHEDULES: RecurringSchedule[] = [
     sourceRefId: 'sub_06',
     createdAt: '2024-01-22T00:00:00Z',
     updatedAt: '2026-08-22T00:00:00Z',
+  },
+];
+
+export const SEED_FRIEND_DEBTS: FriendDebt[] = [
+  {
+    id: 'fdebt_01',
+    userId: 'usr_main_demo',
+    friendName: 'Rahul Sharma',
+    friendPhone: '+919876543210',
+    type: 'lent',
+    amount: 3500,
+    settledAmount: 1000,
+    remainingAmount: 2500,
+    status: 'partially_settled',
+    date: '2026-09-08',
+    dueDate: '2026-09-30',
+    notes: 'Concert tickets booking split for Coldplay',
+    settlements: [
+      {
+        id: 'settle_01',
+        amount: 1000,
+        date: '2026-09-15',
+        notes: 'Paid via GPay partial',
+        createdAt: '2026-09-15T12:00:00Z',
+      },
+    ],
+    createdAt: '2026-09-08T10:00:00Z',
+    updatedAt: '2026-09-15T12:00:00Z',
+  },
+  {
+    id: 'fdebt_02',
+    userId: 'usr_main_demo',
+    friendName: 'Priya Patel',
+    friendPhone: '+919812345678',
+    type: 'lent',
+    amount: 1200,
+    settledAmount: 0,
+    remainingAmount: 1200,
+    status: 'pending',
+    date: '2026-09-18',
+    dueDate: '2026-10-05',
+    notes: 'Weekend cafe brunch split',
+    createdAt: '2026-09-18T15:30:00Z',
+    updatedAt: '2026-09-18T15:30:00Z',
+  },
+  {
+    id: 'fdebt_03',
+    userId: 'usr_main_demo',
+    friendName: 'Vikram Singh',
+    friendPhone: '+919988776655',
+    type: 'borrowed',
+    amount: 2000,
+    settledAmount: 500,
+    remainingAmount: 1500,
+    status: 'partially_settled',
+    date: '2026-09-12',
+    dueDate: '2026-09-28',
+    notes: 'Airport cab fare shared with Vikram',
+    settlements: [
+      {
+        id: 'settle_02',
+        amount: 500,
+        date: '2026-09-16',
+        notes: 'Cash repayment',
+        createdAt: '2026-09-16T18:00:00Z',
+      },
+    ],
+    createdAt: '2026-09-12T14:00:00Z',
+    updatedAt: '2026-09-16T18:00:00Z',
   },
 ];
 

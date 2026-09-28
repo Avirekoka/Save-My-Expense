@@ -356,9 +356,13 @@ class RecurringTransactionService {
         const schedule = schedules.find((s) => s.id === occ.scheduleId);
         if (!schedule) continue;
 
+        const activeUid =
+          storageService.getCurrentUserId() ||
+          (storageService.isDemoUser() ? 'usr_main_demo' : 'usr_authenticated');
+
         const newTx: Transaction = {
           id: `tx_rec_${schedule.id}_${occ.date.replace(/-/g, '')}`,
-          userId: 'usr_main_demo',
+          userId: activeUid,
           amount: occ.amount,
           type: occ.type,
           merchant: occ.name,
@@ -410,9 +414,13 @@ class RecurringTransactionService {
 
     const existingTransactions = storageService.getTransactions();
 
+    const activeUid =
+      storageService.getCurrentUserId() ||
+      (storageService.isDemoUser() ? 'usr_main_demo' : 'usr_authenticated');
+
     const newTx: Transaction = {
       id: `tx_rec_${schedule.id}_${dateStr.replace(/-/g, '')}_${Date.now()}`,
-      userId: 'usr_main_demo',
+      userId: activeUid,
       amount: schedule.amount,
       type: schedule.type,
       merchant: schedule.name,

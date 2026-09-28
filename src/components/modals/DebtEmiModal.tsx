@@ -210,8 +210,8 @@ export const DebtEmiModal: React.FC<DebtEmiModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-xs">
-      <div className="relative w-full max-w-xl rounded-2xl border border-[#262626] bg-[#121212] p-6 text-white shadow-2xl animate-in fade-in zoom-in-95 max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-3 sm:p-4 backdrop-blur-xs">
+      <div className="relative w-full max-w-xl rounded-2xl border border-[#262626] bg-[#121212] p-4 sm:p-6 text-white shadow-2xl animate-in fade-in zoom-in-95 max-h-[calc(100dvh-1.5rem)] sm:max-h-[90vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-[#262626] pb-4">
           <div className="flex items-center gap-3">

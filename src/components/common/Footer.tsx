@@ -14,13 +14,17 @@ import {
 } from 'lucide-react';
 
 interface FooterProps {
+  activeView?: string;
   onNavigate: (view: string) => void;
   onOpenAskMoney?: () => void;
   onOpenBeforeSpend?: () => void;
   onOpenAddModal?: () => void;
+  onOpenScanReceipt?: () => void;
+  currencySymbol?: string;
 }
 
 export const Footer: React.FC<FooterProps> = ({
+  activeView,
   onNavigate,
   onOpenAskMoney,
   onOpenBeforeSpend,
@@ -34,6 +38,19 @@ export const Footer: React.FC<FooterProps> = ({
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
+
+  const suiteLinks = [
+    { id: 'dashboard', label: 'Dashboard Overview', icon: PieChart, color: 'text-blue-400' },
+    { id: 'transactions', label: 'Transactions & Expenses', icon: CreditCard, color: 'text-emerald-400' },
+    { id: 'monthwise', label: 'Month-wise Breakdown', icon: FileSpreadsheet, color: 'text-indigo-400' },
+    { id: 'statements', label: 'Statement Parser (AI)', icon: FileSpreadsheet, color: 'text-sky-400' },
+    { id: 'analytics', label: 'Analytics & Cash Flow', icon: Zap, color: 'text-cyan-400' },
+    { id: 'budgets', label: 'Budgets & Limits', icon: Target, color: 'text-amber-400' },
+    { id: 'goals', label: 'Savings Goals', icon: Target, color: 'text-teal-400' },
+    { id: 'debt', label: 'Debt Snowball & EMIs', icon: Zap, color: 'text-purple-400' },
+    { id: 'insights', label: 'Monthly Financial Stories', icon: Sparkles, color: 'text-emerald-400' },
+    { id: 'settings', label: 'Preferences & Currency', icon: Settings, color: 'text-gray-400' },
+  ];
 
   return (
     <footer className="mt-8 sm:mt-12 border-t border-[#222222] bg-[#0c0c0c]/80 backdrop-blur-md rounded-2xl p-5 sm:p-6 lg:p-8">
@@ -69,52 +86,34 @@ export const Footer: React.FC<FooterProps> = ({
             <h4 className="text-xs font-bold uppercase tracking-wider text-gray-300">
               Financial Suite
             </h4>
-            <ul className="space-y-2 text-xs">
-              <li>
-                <button
-                  onClick={() => onNavigate('dashboard')}
-                  className="text-gray-400 hover:text-white transition flex items-center gap-1.5 cursor-pointer"
-                >
-                  <PieChart size={13} className="text-blue-400" />
-                  Dashboard Overview
-                </button>
-              </li>
-              <li>
-                <button
-                  onClick={() => onNavigate('transactions')}
-                  className="text-gray-400 hover:text-white transition flex items-center gap-1.5 cursor-pointer"
-                >
-                  <CreditCard size={13} className="text-emerald-400" />
-                  Transactions & Expenses
-                </button>
-              </li>
-              <li>
-                <button
-                  onClick={() => onNavigate('monthwise')}
-                  className="text-gray-400 hover:text-white transition flex items-center gap-1.5 cursor-pointer"
-                >
-                  <FileSpreadsheet size={13} className="text-indigo-400" />
-                  Month-wise Breakdown
-                </button>
-              </li>
-              <li>
-                <button
-                  onClick={() => onNavigate('budgets')}
-                  className="text-gray-400 hover:text-white transition flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Target size={13} className="text-amber-400" />
-                  Budgets & Limits
-                </button>
-              </li>
-              <li>
-                <button
-                  onClick={() => onNavigate('debt')}
-                  className="text-gray-400 hover:text-white transition flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Zap size={13} className="text-purple-400" />
-                  Debt Snowball & Avalanche
-                </button>
-              </li>
+            <ul className="space-y-1.5 text-xs">
+              {suiteLinks.map((link) => {
+                const Icon = link.icon;
+                const isActive = activeView === link.id;
+                return (
+                  <li key={link.id}>
+                    <button
+                      type="button"
+                      onClick={() => onNavigate(link.id)}
+                      className={`w-full flex items-center justify-between py-1 px-1.5 rounded-lg transition cursor-pointer text-left ${
+                        isActive
+                          ? 'bg-blue-600/15 text-blue-400 font-bold border border-blue-500/25'
+                          : 'text-gray-400 hover:text-white hover:bg-[#141414]'
+                      }`}
+                    >
+                      <span className="flex items-center gap-1.5 truncate">
+                        <Icon size={13} className={isActive ? 'text-blue-400' : link.color} />
+                        <span className="truncate">{link.label}</span>
+                      </span>
+                      {isActive && (
+                        <span className="text-[9px] uppercase tracking-wider font-extrabold text-blue-400 bg-blue-500/10 px-1 py-0.2 rounded border border-blue-500/20 shrink-0">
+                          Active
+                        </span>
+                      )}
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           </div>
 
@@ -159,20 +158,44 @@ export const Footer: React.FC<FooterProps> = ({
               )}
               <li>
                 <button
+                  type="button"
                   onClick={() => onNavigate('insights')}
-                  className="text-gray-400 hover:text-white transition flex items-center gap-1.5 cursor-pointer"
+                  className={`w-full flex items-center justify-between py-1 px-1.5 rounded-lg transition cursor-pointer text-left ${
+                    activeView === 'insights'
+                      ? 'bg-blue-600/15 text-blue-400 font-bold border border-blue-500/25'
+                      : 'text-gray-400 hover:text-white hover:bg-[#141414]'
+                  }`}
                 >
-                  <Sparkles size={13} className="text-emerald-400" />
-                  Monthly AI Financial Health
+                  <span className="flex items-center gap-1.5">
+                    <Sparkles size={13} className={activeView === 'insights' ? 'text-blue-400' : 'text-emerald-400'} />
+                    <span>Monthly AI Financial Health</span>
+                  </span>
+                  {activeView === 'insights' && (
+                    <span className="text-[9px] uppercase tracking-wider font-extrabold text-blue-400 bg-blue-500/10 px-1 py-0.2 rounded border border-blue-500/20 shrink-0">
+                      Active
+                    </span>
+                  )}
                 </button>
               </li>
               <li>
                 <button
+                  type="button"
                   onClick={() => onNavigate('settings')}
-                  className="text-gray-400 hover:text-white transition flex items-center gap-1.5 cursor-pointer"
+                  className={`w-full flex items-center justify-between py-1 px-1.5 rounded-lg transition cursor-pointer text-left ${
+                    activeView === 'settings'
+                      ? 'bg-blue-600/15 text-blue-400 font-bold border border-blue-500/25'
+                      : 'text-gray-400 hover:text-white hover:bg-[#141414]'
+                  }`}
                 >
-                  <Settings size={13} className="text-gray-400" />
-                  Preferences & Currency
+                  <span className="flex items-center gap-1.5">
+                    <Settings size={13} className={activeView === 'settings' ? 'text-blue-400' : 'text-gray-400'} />
+                    <span>Preferences & Currency</span>
+                  </span>
+                  {activeView === 'settings' && (
+                    <span className="text-[9px] uppercase tracking-wider font-extrabold text-blue-400 bg-blue-500/10 px-1 py-0.2 rounded border border-blue-500/20 shrink-0">
+                      Active
+                    </span>
+                  )}
                 </button>
               </li>
             </ul>

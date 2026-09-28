@@ -15,7 +15,15 @@ import {
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+
+// Parse CLI flags (--port, --host) passed by dev server runner, fallback to env or 3000
+const portArgIndex = process.argv.indexOf('--port');
+const portArg = portArgIndex !== -1 && process.argv[portArgIndex + 1] ? parseInt(process.argv[portArgIndex + 1], 10) : null;
+const PORT = portArg || (process.env.PORT ? parseInt(process.env.PORT, 10) : 3000);
+
+const hostArgIndex = process.argv.indexOf('--host');
+const hostArg = hostArgIndex !== -1 && process.argv[hostArgIndex + 1] ? process.argv[hostArgIndex + 1] : null;
+const HOST = hostArg || '0.0.0.0';
 
 // Security: Disable X-Powered-By header to prevent framework fingerprinting
 app.disable('x-powered-by');
@@ -115,9 +123,37 @@ function getAI(): GoogleGenAI | null {
   return aiClient;
 }
 
+// Resilient Gemini Model Fallback list (prioritizes stable, fast production models)
+const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-flash-latest'];
+
+async function callGeminiWithFallback(
+  ai: GoogleGenAI,
+  params: { contents: any; config?: any }
+) {
+  let lastError: any = null;
+  for (const model of GEMINI_MODELS) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: params.contents,
+        config: params.config,
+      });
+      return response;
+    } catch (err: any) {
+      lastError = err;
+      console.warn(`[Gemini API] Failed with model "${model}":`, err.message || err);
+    }
+  }
+  throw lastError;
+}
+
 // Health check
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', time: new Date().toISOString() });
+  res.json({
+    status: 'ok',
+    geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
+    time: new Date().toISOString(),
+  });
 });
 
 // --- EMAIL VERIFICATION SYSTEM ---
@@ -405,8 +441,7 @@ Tasks:
 6. Provide calculated totalDebit and totalCredit.
 7. CRITICAL AMOUNT UNIT RULE: Amounts MUST ALWAYS be in standard Rupee units (INR) e.g. 1890.50 or 250.00. NEVER multiply amounts by 100 or convert to paise. If amounts in statement have decimals (like 1890.50), preserve the exact decimal value. If the statement explicitly states amounts in paise (e.g., 189050 paise), convert them to rupees (1890.50).`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.7-flash',
+    const response = await callGeminiWithFallback(ai, {
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
@@ -507,8 +542,7 @@ Generate 4 to 6 insightful, mathematically grounded intelligence items:
 
 Ensure all figures and percentages match the actual transaction data provided.`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.7-flash',
+    const response = await callGeminiWithFallback(ai, {
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
@@ -609,8 +643,7 @@ Rules:
 4. Give a clear, friendly, and concise answer with financial context.
 5. Provide 2-3 helpful follow-up questions the user might want to ask next.`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.7-flash',
+    const response = await callGeminiWithFallback(ai, {
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
@@ -700,8 +733,7 @@ Provide a constructive, supportive, and non-judgmental evaluation with:
 - tradeOffAnalysis: what this purchase means for their monthly allocation
 - savingImpact: how to adjust other discretionary spending if they decide to proceed.`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.7-flash',
+    const response = await callGeminiWithFallback(ai, {
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
@@ -754,8 +786,7 @@ ${JSON.stringify(categorySpendingHistory || {})}
 
 Recommend optimal monthly budget allocations across categories. Follow the 50/30/20 rule (Needs/Wants/Savings) adjusted for real spending patterns. Provide clear rationale for each category.`;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.7-flash',
+    const response = await callGeminiWithFallback(ai, {
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
@@ -863,8 +894,7 @@ Instructions:
       text: promptText,
     };
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.7-flash',
+    const response = await callGeminiWithFallback(ai, {
       contents: { parts: [imagePart, textPart] },
       config: {
         responseMimeType: 'application/json',
@@ -1097,9 +1127,16 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`AI Expense Intelligence server running at http://0.0.0.0:${PORT}`);
+  const server = app.listen(PORT, HOST, () => {
+    console.log(`AI Expense Intelligence server running at http://${HOST}:${PORT}`);
+  });
+
+  server.on('error', (err: any) => {
+    console.error('Server error:', err);
   });
 }
 
-startServer();
+startServer().catch((err) => {
+  console.error('Failed to start server:', err);
+  process.exit(1);
+});

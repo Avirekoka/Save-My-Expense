@@ -15,7 +15,7 @@ export type PaymentMethod =
   | 'Bank Transfer'
   | 'Net Banking';
 
-export type TransactionSource = 'manual' | 'statement' | 'import' | 'whatsapp';
+export type TransactionSource = 'manual' | 'statement' | 'import' | 'whatsapp' | 'receipt';
 
 export interface Transaction {
   id: string;
@@ -38,6 +38,9 @@ export interface Transaction {
   rawDescription?: string;
   referenceNo?: string;
   refundedTransactionId?: string;
+  friendDebtId?: string;
+  friendDebtType?: 'lent' | 'borrowed';
+  friendName?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -192,6 +195,7 @@ export type LoanType =
 
 export interface EMILoan {
   id: string;
+  userId?: string;
   name: string;
   lender: string;
   type?: LoanType | string;
@@ -208,6 +212,9 @@ export interface EMILoan {
   color?: string;
   icon?: string;
   prepaymentsMade?: number;
+  status?: 'active' | 'resolved' | 'settled';
+  resolvedDate?: string;
+  settlementTransactionId?: string;
 }
 
 export interface NotificationItem {
@@ -220,7 +227,9 @@ export interface NotificationItem {
     | 'subscription_due'
     | 'monthly_report'
     | 'spending_spike'
-    | 'daily_limit_exceeded';
+    | 'daily_limit_exceeded'
+    | 'emi_due'
+    | 'friend_debt_due';
   date: string;
   read: boolean;
   actionUrl?: string;
@@ -298,4 +307,43 @@ export interface RecurringMonthSummary {
   settledCount: number;
   pendingCount: number;
   breakdownByType: Record<RecurringCategoryType, number>;
+}
+
+export type FriendDebtType = 'lent' | 'borrowed';
+export type FriendDebtStatus = 'pending' | 'partially_settled' | 'settled';
+
+export interface FriendDebtSettlement {
+  id: string;
+  amount: number;
+  date: string; // YYYY-MM-DD
+  notes?: string;
+  createdAt: string;
+}
+
+export interface FriendDebt {
+  id: string;
+  userId: string;
+  friendName: string;
+  friendPhone?: string;
+  type: FriendDebtType; // 'lent' (friend owes me) | 'borrowed' (I owe friend)
+  amount: number;
+  settledAmount: number;
+  remainingAmount: number;
+  status: FriendDebtStatus;
+  date: string; // YYYY-MM-DD
+  dueDate?: string; // YYYY-MM-DD (optional return date)
+  notes?: string;
+  transactionId?: string; // linked ledger transaction
+  settlements?: FriendDebtSettlement[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FriendDebtsSummary {
+  totalLent: number; // money friends owe you (You'll get)
+  totalBorrowed: number; // money you owe friends (You owe)
+  netBalance: number; // totalLent - totalBorrowed (> 0 means net to receive)
+  pendingLentCount: number;
+  pendingBorrowedCount: number;
+  activeDebts: FriendDebt[];
 }

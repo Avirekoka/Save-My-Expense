@@ -27,16 +27,25 @@ import {
   HelpCircle,
   ChevronRight,
   Info,
+  Users,
+  PieChart as PieChartIcon,
 } from 'lucide-react';
-import { EMILoan, LoanType } from '../../types';
+import { EMILoan, LoanType, FriendDebt } from '../../types';
 import { storageService, NOTIFY_EVENT } from '../../services/storage/storage.service';
 import { formatCurrency, formatDate } from '../../utils/formatters';
 import { DebtEmiModal } from '../modals/DebtEmiModal';
 import { PrepaymentModal } from '../modals/PrepaymentModal';
+import { SettleLoanModal } from '../modals/SettleLoanModal';
 import { ConfirmDeleteDialog } from '../common/ConfirmDeleteDialog';
+import { FriendDebtsSection } from './FriendDebtsSection';
+import { EmiDeadlineAlertsSection } from './EmiDeadlineAlertsSection';
+import { DebtDistributionPieChart } from '../debt/DebtDistributionPieChart';
+import { BellRing } from 'lucide-react';
+import { useUpcomingLoanDeadlines, UseUpcomingLoanDeadlinesResult } from '../../hooks/useUpcomingLoanDeadlines';
 
 interface DebtViewProps {
   currencySymbol: string;
+  upcomingDeadlineInfo?: UseUpcomingLoanDeadlinesResult;
 }
 
 const getLoanIcon = (type?: string) => {
@@ -60,12 +69,18 @@ const getLoanIcon = (type?: string) => {
   }
 };
 
-export const DebtView: React.FC<DebtViewProps> = ({ currencySymbol }) => {
+export const DebtView: React.FC<DebtViewProps> = ({ currencySymbol, upcomingDeadlineInfo: propDeadlineInfo }) => {
+  const internalDeadlineInfo = useUpcomingLoanDeadlines();
+  const deadlineInfo = propDeadlineInfo || internalDeadlineInfo;
+  const [activeTab, setActiveTab] = useState<'loans' | 'alerts' | 'friends' | 'distribution'>('loans');
   const [loans, setLoans] = useState<EMILoan[]>([]);
+  const [friendDebts, setFriendDebts] = useState<FriendDebt[]>([]);
+  const [loanListFilter, setLoanListFilter] = useState<'all' | 'active' | 'resolved'>('all');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [loanToEdit, setLoanToEdit] = useState<EMILoan | null>(null);
   const [loanToDelete, setLoanToDelete] = useState<EMILoan | null>(null);
   const [prepaymentLoan, setPrepaymentLoan] = useState<EMILoan | null>(null);
+  const [settlingLoan, setSettlingLoan] = useState<EMILoan | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Strategy & Simulator States
@@ -74,15 +89,18 @@ export const DebtView: React.FC<DebtViewProps> = ({ currencySymbol }) => {
   const [simExtraMonthly, setSimExtraMonthly] = useState<number>(3000);
   const [simLumpSum, setSimLumpSum] = useState<number>(25000);
 
-  const loadLoans = () => {
+  const loadAllData = () => {
     const list = storageService.getEMILoans();
     setLoans(list);
+    setFriendDebts(storageService.getFriendDebts());
   };
 
+  const loadLoans = loadAllData;
+
   useEffect(() => {
-    loadLoans();
-    window.addEventListener(NOTIFY_EVENT, loadLoans);
-    return () => window.removeEventListener(NOTIFY_EVENT, loadLoans);
+    loadAllData();
+    window.addEventListener(NOTIFY_EVENT, loadAllData);
+    return () => window.removeEventListener(NOTIFY_EVENT, loadAllData);
   }, []);
 
   // When loans load, adjust simulator target if needed
@@ -92,11 +110,22 @@ export const DebtView: React.FC<DebtViewProps> = ({ currencySymbol }) => {
     }
   }, [loans, selectedSimLoanId]);
 
+  // Loan partitions (active vs resolved)
+  const activeLoans = loans.filter((l) => (l.remainingAmount || 0) > 0 && l.status !== 'resolved');
+  const resolvedLoans = loans.filter((l) => (l.remainingAmount || 0) <= 0 || l.status === 'resolved');
+
+  const displayedLoans =
+    loanListFilter === 'active'
+      ? activeLoans
+      : loanListFilter === 'resolved'
+      ? resolvedLoans
+      : loans;
+
   // Aggregate Metrics
   const totalBorrowed = loans.reduce((sum, d) => sum + d.totalAmount, 0);
-  const totalOutstanding = loans.reduce((sum, d) => sum + d.remainingAmount, 0);
+  const totalOutstanding = activeLoans.reduce((sum, d) => sum + d.remainingAmount, 0);
   const totalPrincipalRepaid = Math.max(0, totalBorrowed - totalOutstanding);
-  const monthlyCommitment = loans.reduce((sum, d) => sum + d.emiAmount, 0);
+  const monthlyCommitment = activeLoans.reduce((sum, d) => sum + d.emiAmount, 0);
   const totalPrepaymentsLogged = loans.reduce((sum, d) => sum + (d.prepaymentsMade || 0), 0);
 
   // Monthly Income for DTI estimate (from profile or benchmark)
@@ -371,7 +400,152 @@ export const DebtView: React.FC<DebtViewProps> = ({ currencySymbol }) => {
         </div>
       )}
 
-      {/* 2. Top Summary KPI Cards */}
+      {/* Urgent Loan Deadline Banner */}
+      {deadlineInfo.hasUrgentDeadlines && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3.5 sm:p-4 text-xs">
+          <div className="flex items-center gap-2.5">
+            <span className="relative flex h-2.5 w-2.5 shrink-0">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-500"></span>
+            </span>
+            <div>
+              <span className="font-extrabold text-rose-300 mr-2">
+                Urgent Repayment Deadline ({deadlineInfo.urgentCount} due soon):
+              </span>
+              <span className="text-gray-200">
+                {deadlineInfo.closestUrgent?.loan.name} ({deadlineInfo.closestUrgent?.lender}) payment of{' '}
+                <strong className="text-white font-mono">{formatCurrency(deadlineInfo.closestUrgent?.amount || 0, currencySymbol)}</strong> is{' '}
+                {deadlineInfo.closestUrgent?.daysRemaining === 0 ? (
+                  <span className="font-bold text-rose-400">due TODAY</span>
+                ) : (deadlineInfo.closestUrgent?.daysRemaining || 0) < 0 ? (
+                  <span className="font-bold text-rose-400">OVERDUE ({Math.abs(deadlineInfo.closestUrgent?.daysRemaining || 0)}d ago)</span>
+                ) : (
+                  <span className="font-bold text-amber-300">due in {deadlineInfo.closestUrgent?.daysRemaining} days ({deadlineInfo.closestUrgent?.dueDate})</span>
+                )}.
+              </span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActiveTab('alerts')}
+            className="flex items-center gap-1 font-bold text-rose-300 hover:text-white underline cursor-pointer shrink-0 ml-auto sm:ml-0"
+          >
+            <span>Review Reminders</span>
+            <ArrowRight size={13} />
+          </button>
+        </div>
+      )}
+
+      {/* Category Tabs: Bank EMIs vs Repayment Deadline Alerts vs Friends & Peer Money vs Distribution (Sticky while scrolling) */}
+      <div className="z-20 flex items-center gap-2 border-b border-[#262626] pb-3 pt-2 -mt-2 bg-[#0a0a0a]/95 backdrop-blur-md overflow-x-auto no-scrollbar max-w-full flex-nowrap sm:flex-wrap">
+        <button
+          type="button"
+          onClick={() => setActiveTab('loans')}
+          className={`flex items-center gap-2 rounded-xl px-3.5 sm:px-4 py-2 text-xs font-bold transition cursor-pointer whitespace-nowrap shrink-0 ${
+            activeTab === 'loans'
+              ? 'bg-blue-600 text-white shadow-xs'
+              : 'bg-[#161616] text-gray-400 hover:text-white border border-[#262626]'
+          }`}
+        >
+          <CreditCard size={14} />
+          <span>Bank & EMI Loans ({loans.length})</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('alerts')}
+          className={`flex items-center gap-2 rounded-xl px-3.5 sm:px-4 py-2 text-xs font-bold transition cursor-pointer whitespace-nowrap shrink-0 ${
+            activeTab === 'alerts'
+              ? 'bg-amber-600 text-white shadow-xs'
+              : 'bg-[#161616] text-amber-400 hover:text-amber-300 border border-[#262626]'
+          }`}
+        >
+          <BellRing size={14} />
+          <span>EMI Deadline Alerts & Reminders</span>
+          {deadlineInfo.hasUrgentDeadlines && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-rose-500 text-white px-2 py-0.5 text-[10px] font-extrabold animate-pulse">
+              <span className="h-1.5 w-1.5 rounded-full bg-white"></span>
+              {deadlineInfo.urgentCount} Urgent
+            </span>
+          )}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('friends')}
+          className={`flex items-center gap-2 rounded-xl px-3.5 sm:px-4 py-2 text-xs font-bold transition cursor-pointer whitespace-nowrap shrink-0 ${
+            activeTab === 'friends'
+              ? 'bg-indigo-600 text-white shadow-xs'
+              : 'bg-[#161616] text-gray-400 hover:text-white border border-[#262626]'
+          }`}
+        >
+          <Users size={14} />
+          <span>Friends & Peer Money</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('distribution')}
+          className={`flex items-center gap-2 rounded-xl px-3.5 sm:px-4 py-2 text-xs font-bold transition cursor-pointer whitespace-nowrap shrink-0 ${
+            activeTab === 'distribution'
+              ? 'bg-purple-600 text-white shadow-xs'
+              : 'bg-[#161616] text-purple-400 hover:text-purple-300 border border-[#262626]'
+          }`}
+        >
+          <PieChartIcon size={14} />
+          <span>Lent vs. Borrowed Distribution 🥧</span>
+        </button>
+      </div>
+
+      {activeTab === 'distribution' ? (
+        <div className="space-y-6">
+          <DebtDistributionPieChart
+            friendDebts={friendDebts}
+            loans={loans}
+            currencySymbol={currencySymbol}
+          />
+        </div>
+      ) : activeTab === 'friends' ? (
+        <div className="space-y-6">
+          <DebtDistributionPieChart
+            friendDebts={friendDebts}
+            loans={loans}
+            currencySymbol={currencySymbol}
+          />
+          <FriendDebtsSection
+            currencySymbol={currencySymbol}
+            compact={false}
+            title="Friends & Peer Debts Tracker"
+          />
+        </div>
+      ) : activeTab === 'alerts' ? (
+        <EmiDeadlineAlertsSection
+          currencySymbol={currencySymbol}
+          onOpenAddLoan={handleOpenCreate}
+          onSelectLoanForSimulator={(id) => {
+            setSelectedSimLoanId(id);
+            setActiveTab('loans');
+          }}
+        />
+      ) : (
+        <>
+          {/* 1.5. EMI Deadline Alerts & Notification Center (Embedded on Loans View) */}
+          <EmiDeadlineAlertsSection
+            currencySymbol={currencySymbol}
+            onOpenAddLoan={handleOpenCreate}
+            onSelectLoanForSimulator={(id) => {
+              setSelectedSimLoanId(id);
+            }}
+          />
+
+          {/* 1.8. Lent vs Borrowed Pie Chart Distribution by Friend or Entity */}
+          <DebtDistributionPieChart
+            friendDebts={friendDebts}
+            loans={loans}
+            currencySymbol={currencySymbol}
+          />
+
+          {/* 2. Top Summary KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-5">
         <div className="rounded-xl border border-[#222] bg-[#121212] p-3.5 sm:p-4.5 lg:p-5">
           <div className="text-xs text-gray-400">Total Outstanding Principal</div>
@@ -453,51 +627,101 @@ export const DebtView: React.FC<DebtViewProps> = ({ currencySymbol }) => {
 
       {/* 3. Active Loans & EMIs List */}
       <div>
-        <div className="flex items-center justify-between mb-3.5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3.5">
           <div>
-            <h2 className="text-sm font-bold uppercase tracking-wider text-white">
-              Active Loans & EMI Obligations
-            </h2>
-            <p className="text-xs text-gray-400">
-              Click "+ Pre-pay" on any loan to make part-payments or calculate complete pre-closure.
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-bold uppercase tracking-wider text-white">
+                Active Loans & EMI Obligations
+              </h2>
+              <span className="rounded-full bg-blue-500/15 border border-blue-500/30 px-2 py-0.5 text-[10px] font-bold text-blue-400">
+                {activeLoans.length} Pending
+              </span>
+            </div>
+            <p className="text-xs text-gray-400 mt-0.5">
+              Click <strong className="text-emerald-400">"Settle Debt"</strong> on any loan to automatically log an offsetting transaction and mark the loan as resolved.
             </p>
           </div>
-          <span className="text-xs text-gray-400 font-mono">
-            {loans.length} Accounts Active
-          </span>
+
+          {/* Filter Pills: All vs Active vs Resolved */}
+          <div className="flex rounded-xl bg-[#171717] border border-[#262626] p-1 text-xs font-semibold self-start sm:self-auto">
+            <button
+              type="button"
+              onClick={() => setLoanListFilter('all')}
+              className={`rounded-lg px-2.5 py-1.5 transition cursor-pointer ${
+                loanListFilter === 'all'
+                  ? 'bg-blue-600 text-white shadow-xs font-bold'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              All ({loans.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setLoanListFilter('active')}
+              className={`rounded-lg px-2.5 py-1.5 transition cursor-pointer ${
+                loanListFilter === 'active'
+                  ? 'bg-blue-600 text-white shadow-xs font-bold'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              Active ({activeLoans.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setLoanListFilter('resolved')}
+              className={`rounded-lg px-2.5 py-1.5 transition cursor-pointer flex items-center gap-1 ${
+                loanListFilter === 'resolved'
+                  ? 'bg-emerald-600 text-white shadow-xs font-bold'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              <CheckCircle2 size={12} />
+              <span>Resolved ({resolvedLoans.length})</span>
+            </button>
+          </div>
         </div>
 
-        {loans.length === 0 ? (
+        {displayedLoans.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-[#333] bg-[#121212] p-12 text-center">
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600/10 text-blue-400 mx-auto mb-3">
               <Landmark size={24} />
             </div>
-            <h3 className="text-base font-bold text-white">No Loans or EMIs Registered</h3>
+            <h3 className="text-base font-bold text-white">
+              {loanListFilter === 'resolved'
+                ? 'No Resolved Loans Yet'
+                : loanListFilter === 'active'
+                ? 'No Pending Active Loans'
+                : 'No Loans or EMIs Registered'}
+            </h3>
             <p className="text-xs text-gray-400 max-w-md mx-auto mt-1 mb-5">
-              You are currently debt-free! If you have any personal loans, home mortgages, auto loans, or credit card EMIs, add them here to track interest savings.
+              {loanListFilter === 'resolved'
+                ? 'When you click "Settle Debt" on an active loan, it will be marked as resolved and appear here.'
+                : 'You are currently debt-free! If you have any personal loans, mortgages, or card EMIs, add them here.'}
             </p>
-            <button
-              onClick={handleOpenCreate}
-              className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-blue-500 transition shadow-md cursor-pointer"
-            >
-              <Plus size={15} />
-              <span>Add First Loan / EMI</span>
-            </button>
+            {loanListFilter !== 'resolved' && (
+              <button
+                onClick={handleOpenCreate}
+                className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-blue-500 transition shadow-md cursor-pointer"
+              >
+                <Plus size={15} />
+                <span>Add First Loan / EMI</span>
+              </button>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
-            {loans.map((loan) => {
+            {displayedLoans.map((loan) => {
+              const isSettled = (loan.remainingAmount || 0) <= 0 || loan.status === 'resolved';
               const paidPct =
                 loan.totalAmount > 0
                   ? Math.min(
                       100,
                       Math.round(
-                        ((loan.totalAmount - loan.remainingAmount) / loan.totalAmount) * 100
+                        ((loan.totalAmount - (loan.remainingAmount || 0)) / loan.totalAmount) * 100
                       )
                     )
                   : 100;
 
-              const isSettled = loan.remainingAmount <= 0;
               const IconComp = getLoanIcon(loan.type);
               const loanColor = loan.color || '#3B82F6';
 
@@ -510,7 +734,9 @@ export const DebtView: React.FC<DebtViewProps> = ({ currencySymbol }) => {
               return (
                 <div
                   key={loan.id}
-                  className="rounded-2xl border border-[#222] bg-[#121212] p-4 sm:p-5 shadow-xs hover:border-[#333] transition flex flex-col justify-between group"
+                  className={`rounded-2xl border bg-[#121212] p-4 sm:p-5 shadow-xs transition flex flex-col justify-between group ${
+                    isSettled ? 'border-emerald-500/20 bg-emerald-500/[0.02]' : 'border-[#222] hover:border-[#333]'
+                  }`}
                 >
                   <div>
                     {/* Loan Header */}
@@ -528,8 +754,9 @@ export const DebtView: React.FC<DebtViewProps> = ({ currencySymbol }) => {
                               {loan.name}
                             </h3>
                             {isSettled && (
-                              <span className="rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 text-[9px] font-bold">
-                                Paid Off 🎉
+                              <span className="rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 text-[9px] font-bold flex items-center gap-0.5">
+                                <CheckCircle2 size={10} />
+                                <span>Resolved 🎉</span>
                               </span>
                             )}
                           </div>
@@ -568,8 +795,12 @@ export const DebtView: React.FC<DebtViewProps> = ({ currencySymbol }) => {
                         <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">
                           Pending Loan Balance
                         </span>
-                        <div className="font-mono text-lg font-bold text-white">
-                          {formatCurrency(loan.remainingAmount, currencySymbol)}
+                        <div
+                          className={`font-mono text-lg font-bold ${
+                            isSettled ? 'text-emerald-400 line-through' : 'text-white'
+                          }`}
+                        >
+                          {formatCurrency(loan.remainingAmount || 0, currencySymbol)}
                         </div>
                       </div>
                       <div className="text-right">
@@ -587,13 +818,13 @@ export const DebtView: React.FC<DebtViewProps> = ({ currencySymbol }) => {
                       <div className="flex items-center justify-between text-[11px]">
                         <span className="text-gray-400 font-medium">Principal Paid Off</span>
                         <span className="font-mono font-bold text-emerald-400">
-                          {paidPct}%
+                          {isSettled ? '100%' : `${paidPct}%`}
                         </span>
                       </div>
                       <div className="h-2 w-full rounded-full bg-[#202020] overflow-hidden">
                         <div
                           className="h-full rounded-full transition-all duration-500 bg-emerald-500"
-                          style={{ width: `${paidPct}%` }}
+                          style={{ width: `${isSettled ? 100 : paidPct}%` }}
                         />
                       </div>
                     </div>
@@ -609,7 +840,11 @@ export const DebtView: React.FC<DebtViewProps> = ({ currencySymbol }) => {
                       <div>
                         <span className="text-gray-500 block text-[10px] uppercase font-bold">Next Due Date</span>
                         <span className="text-gray-300 font-medium truncate block">
-                          {loan.nextDueDate ? formatDate(loan.nextDueDate) : 'Auto-Debit'}
+                          {isSettled
+                            ? 'All Paid Off'
+                            : loan.nextDueDate
+                            ? formatDate(loan.nextDueDate)
+                            : 'Auto-Debit'}
                         </span>
                       </div>
                     </div>
@@ -617,10 +852,12 @@ export const DebtView: React.FC<DebtViewProps> = ({ currencySymbol }) => {
                     {/* Tenure Details */}
                     <div className="mt-2 flex items-center justify-between text-[10px] text-gray-400 px-1">
                       <span>
-                        Paid: <strong>{loan.paidMonths || 0}</strong> of {loan.tenureMonths} mos
+                        Paid: <strong>{isSettled ? loan.tenureMonths : loan.paidMonths || 0}</strong> of {loan.tenureMonths} mos
                       </span>
                       <span>
-                        Remaining: <strong className="text-white">{tenureMonthsLeft} mos</strong>
+                        Remaining: <strong className={isSettled ? 'text-emerald-400' : 'text-white'}>
+                          {isSettled ? '0 mos (Closed)' : `${tenureMonthsLeft} mos`}
+                        </strong>
                       </span>
                     </div>
 
@@ -631,26 +868,45 @@ export const DebtView: React.FC<DebtViewProps> = ({ currencySymbol }) => {
                     )}
                   </div>
 
-                  {/* Quick Action Button */}
+                  {/* Action Buttons: Part-Pay and Settle Debt */}
                   <div className="mt-4 pt-3 border-t border-[#1f1f1f] flex items-center justify-between gap-2">
-                    <div className="text-[10px] text-gray-500">
+                    <div className="text-[10px] text-gray-500 truncate">
                       {loan.prepaymentsMade
                         ? `Prepaid: ${formatCurrency(loan.prepaymentsMade, currencySymbol)}`
                         : 'No prepayments yet'}
                     </div>
 
                     {!isSettled ? (
-                      <button
-                        onClick={() => setPrepaymentLoan(loan)}
-                        className="flex items-center gap-1.5 rounded-lg bg-emerald-600/15 border border-emerald-500/30 px-3 py-1.5 text-xs font-bold text-emerald-300 hover:bg-emerald-600/25 transition cursor-pointer"
-                      >
-                        <Zap size={13} />
-                        <span>+ Pre-pay / Settle</span>
-                      </button>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => setPrepaymentLoan(loan)}
+                          className="flex items-center gap-1 rounded-lg bg-[#202020] hover:bg-[#282828] text-gray-300 px-2.5 py-1.5 text-xs font-semibold transition cursor-pointer"
+                          title="Make custom partial pre-payment"
+                        >
+                          <span>Part-Pay</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setSettlingLoan(loan)}
+                          className="flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 text-xs font-bold shadow-md shadow-emerald-950/40 transition cursor-pointer"
+                          title="Automatically log offsetting transaction and mark this loan as resolved"
+                        >
+                          <CheckCircle2 size={13} />
+                          <span>Settle Debt</span>
+                        </button>
+                      </div>
                     ) : (
-                      <span className="text-xs font-bold text-emerald-400 flex items-center gap-1">
-                        <CheckCircle2 size={13} /> Completed
-                      </span>
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-2.5 py-1">
+                        <CheckCircle2 size={13} />
+                        <span>Debt Resolved</span>
+                        {loan.resolvedDate && (
+                          <span className="text-[10px] font-normal text-emerald-300/70">
+                            • {loan.resolvedDate}
+                          </span>
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
@@ -1047,18 +1303,36 @@ export const DebtView: React.FC<DebtViewProps> = ({ currencySymbol }) => {
                     </span>
                   </div>
 
-                  <button
-                    onClick={() => setPrepaymentLoan(loan)}
-                    className="rounded-lg bg-[#202020] hover:bg-emerald-600 hover:text-white text-gray-300 px-3 py-1.5 text-xs font-semibold transition cursor-pointer"
-                  >
-                    Pre-pay
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => setPrepaymentLoan(loan)}
+                      className="rounded-lg bg-[#202020] hover:bg-[#282828] text-gray-300 px-2.5 py-1.5 text-xs font-semibold transition cursor-pointer"
+                    >
+                      Pre-pay
+                    </button>
+                    {loan.remainingAmount > 0 && loan.status !== 'resolved' ? (
+                      <button
+                        onClick={() => setSettlingLoan(loan)}
+                        className="rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white px-2.5 py-1.5 text-xs font-bold transition cursor-pointer flex items-center gap-1 shadow-xs"
+                        title="Automatically log offsetting transaction and mark loan as resolved"
+                      >
+                        <CheckCircle2 size={12} />
+                        <span>Settle Debt</span>
+                      </button>
+                    ) : (
+                      <span className="text-[11px] font-bold text-emerald-400 flex items-center gap-1">
+                        <CheckCircle2 size={12} /> Resolved
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             );
           })}
         </div>
       </div>
+      </>
+      )}
 
       {/* Debt / EMI Add & Edit Modal */}
       <DebtEmiModal
@@ -1084,6 +1358,24 @@ export const DebtView: React.FC<DebtViewProps> = ({ currencySymbol }) => {
         loan={prepaymentLoan}
         currencySymbol={currencySymbol}
         onSuccess={loadLoans}
+      />
+
+      {/* Settle Loan Confirmation & Transaction Logging Modal */}
+      <SettleLoanModal
+        isOpen={!!settlingLoan}
+        onClose={() => setSettlingLoan(null)}
+        loan={settlingLoan}
+        currencySymbol={currencySymbol}
+        onSuccess={(resolvedLoan, tx) => {
+          loadAllData();
+          setToastMessage(
+            `🎉 Successfully settled "${resolvedLoan.name}"! Logged offsetting transaction of ${formatCurrency(
+              tx.amount,
+              currencySymbol
+            )} and marked loan as resolved.`
+          );
+          setTimeout(() => setToastMessage(null), 5000);
+        }}
       />
 
       {/* Debt Delete Confirmation Dialog */}

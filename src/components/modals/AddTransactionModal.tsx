@@ -13,12 +13,14 @@ import {
   Receipt,
   CheckCircle2,
   RotateCcw,
+  Users,
 } from 'lucide-react';
 import {
   Transaction,
   Category,
   TransactionType,
   PaymentMethod,
+  FriendDebtType,
 } from '../../types';
 import { storageService } from '../../services/storage/storage.service';
 import { ExpenseCategorizer } from '../../services/ai/expense-categorizer';
@@ -32,6 +34,7 @@ interface AddTransactionModalProps {
   onSuccess?: () => void;
   editingTransaction?: Transaction | null;
   initialReceiptData?: ScannedReceiptData | null;
+  initialFriendDebtMode?: { type: 'lent' | 'borrowed'; friendName?: string } | null;
   currencySymbol: string;
 }
 
@@ -41,6 +44,7 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   onSuccess,
   editingTransaction,
   initialReceiptData,
+  initialFriendDebtMode,
   currencySymbol,
 }) => {
   useScrollLock(isOpen);
@@ -58,6 +62,13 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<boolean>(false);
   const [isScannerOpen, setIsScannerOpen] = useState<boolean>(false);
   const [scannedReceipt, setScannedReceipt] = useState<ScannedReceiptData | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [isFriendDebt, setIsFriendDebt] = useState<boolean>(false);
+  const [friendDebtType, setFriendDebtType] = useState<FriendDebtType>('lent');
+  const [friendName, setFriendName] = useState<string>('');
+  const [friendPhone, setFriendPhone] = useState<string>('');
+  const [friendDueDate, setFriendDueDate] = useState<string>('');
   const [aiSuggestion, setAiSuggestion] = useState<{
     catId: string;
     catName: string;
@@ -110,8 +121,54 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       setNotes(editingTransaction.notes || '');
       setIsRecurring(!!editingTransaction.isRecurring);
       setScannedReceipt(null);
+
+      if (editingTransaction.friendDebtType) {
+        setIsFriendDebt(true);
+        setFriendDebtType(editingTransaction.friendDebtType);
+        setFriendName(editingTransaction.friendName || editingTransaction.merchant || '');
+        const debts = storageService.getFriendDebts();
+        const matchDebt = editingTransaction.friendDebtId
+          ? debts.find((d) => d.id === editingTransaction.friendDebtId)
+          : debts.find((d) => d.friendName.toLowerCase() === (editingTransaction.friendName || editingTransaction.merchant).toLowerCase());
+        if (matchDebt) {
+          setFriendPhone(matchDebt.friendPhone || '');
+          setFriendDueDate(matchDebt.dueDate || '');
+        } else {
+          setFriendPhone('');
+          setFriendDueDate('');
+        }
+      } else {
+        setIsFriendDebt(false);
+        setFriendDebtType('lent');
+        setFriendName('');
+        setFriendPhone('');
+        setFriendDueDate('');
+      }
     } else if (initialReceiptData) {
       applyReceiptData(initialReceiptData);
+      setIsFriendDebt(false);
+      setFriendDebtType('lent');
+      setFriendName('');
+      setFriendPhone('');
+      setFriendDueDate('');
+    } else if (initialFriendDebtMode) {
+      setAmount('');
+      const defaultName = initialFriendDebtMode.friendName || '';
+      setMerchant(defaultName);
+      setFriendName(defaultName);
+      setIsFriendDebt(true);
+      setFriendDebtType(initialFriendDebtMode.type);
+      setType(initialFriendDebtMode.type === 'lent' ? 'expense' : 'income');
+      setCategoryId('transfers');
+      setDate(new Date().toISOString().slice(0, 10));
+      setPaymentMethod('UPI');
+      setTags('friend-debt');
+      setNotes('');
+      setFriendPhone('');
+      setFriendDueDate('');
+      setIsRecurring(false);
+      setAiSuggestion(null);
+      setScannedReceipt(null);
     } else {
       setAmount('');
       setMerchant('');
@@ -122,15 +179,23 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       setTags('');
       setNotes('');
       setIsRecurring(false);
+      setIsFriendDebt(false);
+      setFriendDebtType('lent');
+      setFriendName('');
+      setFriendPhone('');
+      setFriendDueDate('');
       setAiSuggestion(null);
       setScannedReceipt(null);
     }
-  }, [editingTransaction, initialReceiptData, isOpen]);
+  }, [editingTransaction, initialReceiptData, initialFriendDebtMode, isOpen]);
 
   // Real-time AI categorization suggestion while typing merchant
   const handleMerchantChange = (val: string) => {
     setMerchant(val);
-    if (val.trim().length >= 3 && type === 'expense') {
+    if (isFriendDebt && !friendName) {
+      setFriendName(val);
+    }
+    if (val.trim().length >= 3 && type === 'expense' && !isFriendDebt) {
       const suggestion = ExpenseCategorizer.suggestCategory(
         val,
         notes,
@@ -157,11 +222,30 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError(null);
+
     const numAmount = parseFloat(amount);
-    if (isNaN(numAmount) || numAmount <= 0) return;
-    if (!merchant.trim()) return;
+    if (isNaN(numAmount) || numAmount <= 0) {
+      setFormError('Please enter a valid amount greater than 0.');
+      return;
+    }
+
+    const effectiveFriendName = isFriendDebt ? (friendName.trim() || merchant.trim()) : undefined;
+    if (isFriendDebt && !effectiveFriendName) {
+      setFormError("Please enter your friend's name (who you lent to or borrowed from).");
+      return;
+    }
+
+    const effectiveMerchant = isFriendDebt ? (effectiveFriendName || merchant.trim()) : merchant.trim();
+    if (!effectiveMerchant) {
+      setFormError('Please enter a payee or merchant name (e.g. Starbucks, Amazon).');
+      return;
+    }
+
+    const effectiveType = isFriendDebt ? (friendDebtType === 'lent' ? 'expense' : 'income') : type;
+    const effectiveCategoryId = isFriendDebt && categoryId === 'food' ? 'transfers' : categoryId;
 
     const parsedTags = tags
       .split(',')
@@ -169,29 +253,66 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
       .filter((t) => t.length > 0);
 
     // Save learning rule if user manually selected category for merchant
-    ExpenseCategorizer.recordUserCorrection(merchant, categoryId);
+    if (!isFriendDebt) {
+      ExpenseCategorizer.recordUserCorrection(effectiveMerchant, effectiveCategoryId);
+    }
+
+    const activeUid =
+      storageService.getCurrentUserId() ||
+      (storageService.isDemoUser() ? 'usr_main_demo' : 'usr_authenticated');
 
     const tx: Transaction = {
       id: editingTransaction ? editingTransaction.id : `tx_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
-      userId: 'usr_main_demo',
+      userId: editingTransaction ? editingTransaction.userId : activeUid,
       amount: numAmount,
-      type,
-      merchant: merchant.trim(),
-      categoryId,
+      type: effectiveType,
+      merchant: effectiveMerchant,
+      categoryId: effectiveCategoryId,
       date,
       paymentMethod,
-      source: scannedReceipt ? 'receipt_scan' : (editingTransaction ? editingTransaction.source : 'manual'),
+      source: scannedReceipt ? 'receipt' : (editingTransaction ? editingTransaction.source : 'manual'),
       isRecurring,
-      tags: parsedTags,
+      tags: isFriendDebt ? Array.from(new Set([...parsedTags, 'friend-debt', friendDebtType])) : parsedTags,
       notes: notes.trim() || undefined,
       confidenceScore: scannedReceipt ? scannedReceipt.confidenceScore : 98,
+      friendDebtType: isFriendDebt ? friendDebtType : undefined,
+      friendName: isFriendDebt ? effectiveFriendName : undefined,
+      friendDebtId: editingTransaction ? editingTransaction.friendDebtId : undefined,
       createdAt: editingTransaction ? editingTransaction.createdAt : new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
 
-    storageService.saveTransaction(tx);
-    onSuccess?.();
-    onClose();
+    try {
+      setIsSubmitting(true);
+      setFormError(null);
+      const res = await storageService.saveTransaction(tx);
+      if (res && res.error) {
+        console.warn('Transaction saved with warning/error:', res.error);
+      }
+
+      // If friend debt metadata like due date or phone was specified, persist to the friend debt document
+      if (isFriendDebt && (friendDueDate || friendPhone)) {
+        try {
+          const debts = storageService.getFriendDebts();
+          const targetDebt = tx.friendDebtId
+            ? debts.find((d) => d.id === tx.friendDebtId)
+            : debts.find((d) => d.friendName.toLowerCase() === effectiveFriendName?.toLowerCase());
+          if (targetDebt) {
+            if (friendDueDate) targetDebt.dueDate = friendDueDate;
+            if (friendPhone) targetDebt.friendPhone = friendPhone;
+            storageService.saveFriendDebt(targetDebt);
+          }
+        } catch (_) {}
+      }
+
+      onSuccess?.();
+      onClose();
+    } catch (err: any) {
+      console.error('Failed to save transaction:', err);
+      setFormError(err?.message || 'Failed to record transaction. Please check console or try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   if (!isOpen) return null;
@@ -285,6 +406,25 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
             )}
 
             <form onSubmit={handleSubmit} className="space-y-4">
+              {/* Form Validation Error Banner */}
+              {formError && (
+                <div
+                  id="add-tx-form-error"
+                  role="alert"
+                  className="flex items-center gap-2.5 rounded-xl border border-rose-500/30 bg-rose-950/30 p-3 text-xs text-rose-300"
+                >
+                  <AlertTriangle size={16} className="text-rose-400 shrink-0" />
+                  <span className="flex-1 font-medium">{formError}</span>
+                  <button
+                    type="button"
+                    onClick={() => setFormError(null)}
+                    className="p-1 text-rose-400 hover:text-white rounded"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              )}
+
               {/* Type Selector (Pills) */}
               <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5 rounded-xl bg-[#0f0f0f] border border-[#262626] p-1 text-xs font-semibold text-gray-400">
                 {(
@@ -300,7 +440,13 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                   <button
                     key={t.id}
                     type="button"
-                    onClick={() => setType(t.id)}
+                    onClick={() => {
+                      setType(t.id);
+                      if (isFriendDebt) {
+                        if (t.id === 'income') setFriendDebtType('borrowed');
+                        else if (t.id === 'expense') setFriendDebtType('lent');
+                      }
+                    }}
                     className={`rounded-lg py-1.5 px-1 text-center transition cursor-pointer truncate ${
                       type === t.id
                         ? 'bg-[#262626] text-white font-bold shadow-xs'
@@ -310,6 +456,168 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                     {t.label}
                   </button>
                 ))}
+              </div>
+
+              {/* Friend Lending / Borrowing Card (Who owes who?) */}
+              <div
+                className={`rounded-xl border p-3 sm:p-3.5 transition ${
+                  isFriendDebt
+                    ? 'border-indigo-500/50 bg-gradient-to-b from-indigo-950/30 to-[#121212]'
+                    : 'border-[#262626] bg-[#0f0f0f] hover:border-[#383838]'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div
+                      className={`flex h-8 w-8 items-center justify-center rounded-xl shrink-0 transition ${
+                        isFriendDebt
+                          ? 'bg-indigo-600 text-white shadow-xs'
+                          : 'bg-[#1e1e1e] text-gray-400'
+                      }`}
+                    >
+                      <Users size={16} />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold text-white flex items-center gap-1.5 flex-wrap">
+                        <span>Friend Money (Lend / Borrow)</span>
+                        {isFriendDebt && (
+                          <span className="rounded-md bg-indigo-500/20 px-1.5 py-0.2 text-[9px] font-bold text-indigo-300 border border-indigo-500/30">
+                            Dashboard Sync Active
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-gray-400 truncate">
+                        Track who owes you money or who you owe, shown directly on the Dashboard
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = !isFriendDebt;
+                      setIsFriendDebt(next);
+                      if (next) {
+                        setType(friendDebtType === 'lent' ? 'expense' : 'income');
+                        if (categoryId === 'food') setCategoryId('transfers');
+                        if (friendName && !merchant) setMerchant(friendName);
+                      }
+                    }}
+                    className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden ${
+                      isFriendDebt ? 'bg-indigo-600' : 'bg-[#2a2a2a]'
+                    }`}
+                    title="Toggle friend lending/borrowing tracking"
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
+                        isFriendDebt ? 'translate-x-4' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {/* Expanded Friend Options */}
+                {isFriendDebt && (
+                  <div className="mt-3 pt-3 border-t border-indigo-500/20 space-y-3 animate-in fade-in duration-150">
+                    {/* Direction: Lent vs Borrowed */}
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-indigo-300 mb-1.5">
+                        Who gave money to whom?
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setFriendDebtType('lent');
+                            setType('expense');
+                          }}
+                          className={`flex items-center justify-center gap-2 rounded-xl py-2 px-2.5 text-xs font-bold border transition cursor-pointer text-center ${
+                            friendDebtType === 'lent'
+                              ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300 shadow-xs'
+                              : 'bg-[#161616] border-[#262626] text-gray-400 hover:text-white'
+                          }`}
+                        >
+                          <span className="h-2 w-2 rounded-full bg-emerald-400 shrink-0" />
+                          <span className="truncate">I Lent Money (They owe me)</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setFriendDebtType('borrowed');
+                            setType('income');
+                          }}
+                          className={`flex items-center justify-center gap-2 rounded-xl py-2 px-2.5 text-xs font-bold border transition cursor-pointer text-center ${
+                            friendDebtType === 'borrowed'
+                              ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 shadow-xs'
+                              : 'bg-[#161616] border-[#262626] text-gray-400 hover:text-white'
+                          }`}
+                        >
+                          <span className="h-2 w-2 rounded-full bg-amber-400 shrink-0" />
+                          <span className="truncate">I Borrowed (I owe them)</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Friend Name & Phone Inputs */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-300 mb-1">
+                          Friend's Name *
+                        </label>
+                        <input
+                          type="text"
+                          required={isFriendDebt}
+                          placeholder="e.g. Rahul, Alex, Priya"
+                          value={friendName}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setFriendName(val);
+                            setMerchant(val);
+                          }}
+                          className="w-full min-h-[40px] rounded-xl border border-indigo-500/40 bg-[#161616] px-3 py-2 text-xs text-white placeholder:text-gray-500 focus:border-indigo-400 focus:outline-hidden"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-300 mb-1">
+                          Friend's Phone / WhatsApp (Optional)
+                        </label>
+                        <input
+                          type="tel"
+                          placeholder="e.g. +91 98765 43210"
+                          value={friendPhone}
+                          onChange={(e) => setFriendPhone(e.target.value)}
+                          className="w-full min-h-[40px] rounded-xl border border-[#2a2a2a] bg-[#161616] px-3 py-2 text-xs text-white placeholder:text-gray-500 focus:border-indigo-400 focus:outline-hidden"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Return Date & Dashboard notice */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 items-end">
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-300 mb-1">
+                          Expected Return / Due Date (Optional)
+                        </label>
+                        <input
+                          type="date"
+                          value={friendDueDate}
+                          onChange={(e) => setFriendDueDate(e.target.value)}
+                          className="w-full min-h-[40px] rounded-xl border border-[#2a2a2a] bg-[#161616] px-3 py-2 text-xs text-gray-200 focus:border-indigo-400 focus:outline-hidden"
+                        />
+                      </div>
+
+                      <div className="rounded-xl bg-indigo-950/40 border border-indigo-500/30 p-2.5 text-[11px] text-indigo-300 flex items-center gap-2">
+                        <Sparkles size={14} className="text-indigo-400 shrink-0" />
+                        <span>
+                          {friendDebtType === 'lent'
+                            ? "Will show on Dashboard under 'You'll Get'"
+                            : "Will show on Dashboard under 'You Owe'"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Amount & Date */}
@@ -520,9 +828,17 @@ export const AddTransactionModal: React.FC<AddTransactionModalProps> = ({
                   </button>
                   <button
                     type="submit"
-                    className="rounded-xl bg-blue-600 px-5 py-2.5 text-xs font-bold text-white shadow-xs hover:bg-blue-500 cursor-pointer transition"
+                    disabled={isSubmitting}
+                    className="flex items-center gap-1.5 rounded-xl bg-blue-600 px-5 py-2.5 text-xs font-bold text-white shadow-xs hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition"
                   >
-                    {editingTransaction ? 'Save Changes' : 'Add Transaction'}
+                    {isSubmitting ? (
+                      <>
+                        <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent inline-block" />
+                        <span>Saving...</span>
+                      </>
+                    ) : (
+                      <span>{editingTransaction ? 'Save Changes' : 'Add Transaction'}</span>
+                    )}
                   </button>
                 </div>
               </div>

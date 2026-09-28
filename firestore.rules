@@ -72,6 +72,15 @@ service cloud.firestore {
         data.userId is string && data.userId.size() <= 128;
     }
 
+    function isValidFriendDebt(data) {
+      return data is map &&
+        data.friendName is string && data.friendName.size() >= 1 && data.friendName.size() <= 100 &&
+        data.type is string && (data.type in ['lent', 'borrowed']) &&
+        data.amount is number && data.amount > 0 && data.amount <= 1000000000 &&
+        data.status is string && (data.status in ['pending', 'partially_settled', 'settled']) &&
+        data.date is string && data.date.size() == 10;
+    }
+
     // 1. User Profile and Private Subcollections
     match /users/{userId} {
       // PII Protection: Only the authenticated user can read or write their own profile
@@ -102,6 +111,13 @@ service cloud.firestore {
       match /goals/{goalId} {
         allow get, list: if isOwner(userId);
         allow create, update: if isOwner(userId) && isValidGoal(incoming());
+        allow delete: if isOwner(userId);
+      }
+
+      // Friend Debts (Lending & Borrowing with friends)
+      match /friend_debts/{debtId} {
+        allow get, list: if isOwner(userId);
+        allow create, update: if isOwner(userId) && isValidFriendDebt(incoming());
         allow delete: if isOwner(userId);
       }
 

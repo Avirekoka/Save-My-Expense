@@ -147,8 +147,8 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
         </div>
       )}
 
-      {/* Header */}
-      <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 sm:gap-4">
+      {/* Header with Sticky Analytics Tabs */}
+      <div className="top-0 z-20 -mx-1 px-1 py-2.5 bg-[#0a0a0a]/95 backdrop-blur-md border-b border-[#262626]/40 flex flex-col xl:flex-row xl:items-center justify-between gap-3 sm:gap-4 transition-all">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
             Analytics & Cash Flow Intelligence
@@ -158,14 +158,14 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 w-full xl:w-auto">
           {/* Month Selector & Download PDF Report Button */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap w-full sm:w-auto">
             <select
               id="report-month-select"
               value={selectedReportMonth}
               onChange={(e) => setSelectedReportMonth(e.target.value)}
-              className="rounded-xl border border-[#262626] bg-[#0f0f0f] px-3 py-2 text-xs font-semibold text-gray-300 focus:border-blue-500 focus:outline-none"
+              className="flex-1 sm:flex-none rounded-xl border border-[#262626] bg-[#0f0f0f] px-3 py-2 text-xs font-semibold text-gray-300 focus:border-blue-500 focus:outline-none cursor-pointer"
               title="Select report period"
             >
               {getLastThreeMonths(activeMonthStr).map((m) => (
@@ -179,7 +179,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
               id="download-monthly-report-btn"
               onClick={() => handleDownloadReport(selectedReportMonth)}
               disabled={isGenerating}
-              className="flex items-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 px-4 py-2 text-xs font-bold text-white shadow-xs transition cursor-pointer"
+              className="flex-1 sm:flex-none flex items-center justify-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 px-3.5 sm:px-4 py-2 text-xs font-bold text-white shadow-xs transition cursor-pointer shrink-0"
               title={`Download comprehensive PDF financial report for ${getMonthName(selectedReportMonth)}`}
             >
               {isGenerating ? (
@@ -191,11 +191,11 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             </button>
           </div>
 
-          {/* View Tabs */}
-          <div className="flex rounded-xl border border-[#262626] bg-[#0f0f0f] p-1 text-xs">
+          {/* View Tabs (Swipeable on mobile/tablet) */}
+          <div className="flex overflow-x-auto no-scrollbar max-w-full rounded-xl border border-[#262626] bg-[#0f0f0f] p-1 text-xs shrink-0 w-full sm:w-auto">
             <button
               onClick={() => setActiveTab('heatmap')}
-              className={`rounded-lg px-3 py-1.5 font-semibold transition cursor-pointer ${
+              className={`rounded-lg px-2.5 sm:px-3 py-1.5 font-semibold transition cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === 'heatmap'
                   ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30'
                   : 'text-gray-400 hover:text-white'
@@ -205,7 +205,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             </button>
             <button
               onClick={() => setActiveTab('mom')}
-              className={`rounded-lg px-3 py-1.5 font-semibold transition cursor-pointer ${
+              className={`rounded-lg px-2.5 sm:px-3 py-1.5 font-semibold transition cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === 'mom'
                   ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30'
                   : 'text-gray-400 hover:text-white'
@@ -215,7 +215,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             </button>
             <button
               onClick={() => setActiveTab('cashflow')}
-              className={`rounded-lg px-3 py-1.5 font-semibold transition cursor-pointer ${
+              className={`rounded-lg px-2.5 sm:px-3 py-1.5 font-semibold transition cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === 'cashflow'
                   ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30'
                   : 'text-gray-400 hover:text-white'
@@ -225,7 +225,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             </button>
             <button
               onClick={() => setActiveTab('merchants')}
-              className={`rounded-lg px-3 py-1.5 font-semibold transition cursor-pointer ${
+              className={`rounded-lg px-2.5 sm:px-3 py-1.5 font-semibold transition cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === 'merchants'
                   ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30'
                   : 'text-gray-400 hover:text-white'
@@ -235,7 +235,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({
             </button>
             <button
               onClick={() => setActiveTab('methods')}
-              className={`rounded-lg px-3 py-1.5 font-semibold transition cursor-pointer ${
+              className={`rounded-lg px-2.5 sm:px-3 py-1.5 font-semibold transition cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === 'methods'
                   ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30'
                   : 'text-gray-400 hover:text-white'
